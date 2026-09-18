@@ -1,0 +1,19 @@
+# 统一换行：仓库内一律 LF，检出也用 LF。
+# 跨平台项目（Windows / Linux 一等公民）没有这条，Windows 贡献者提交的 CRLF 会让
+# 整个文件在 diff 里显示为全量改动，review 时直接失效。
+* text=auto eol=lf
+
+# 二进制：禁止任何换行转换与差异计算
+*.png binary
+*.jpg binary
+*.ico binary
+*.mp4 binary
+*.avi binary
+*.wav binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.AppImage binary
+*.deb binary

@@ -1,0 +1,36 @@
+# 构建产物
+/build/
+/build-pkg/
+/build-pthreads/
+/build-rel/
+/dist/
+/out/
+
+# 第三方源码（FetchContent 落地，规则 8：只读、不追踪）
+/third_party/
+
+# 日志（仓库里实际叫 log/，单复数都写上 —— 只写 /logs/ 会漏掉 log/ 里的排查截图）
+*.log
+/log/
+/logs/
+
+# WorkBuddy 工作区数据
+/.workbuddy/
+
+# 编辑器与系统
+.vs/
+.vscode/
+.idea/
+.cache/
+.DS_Store
+Thumbs.db
+
+# 机器相关本地配置
+/settings.local.json
+
+# 探针编译产物（源码 .cpp 提交，exe 本地重编即得）
+/tools/*.exe
+
+# Python 字节码缓存（tools/ 下的脚本被 import 时生成）
+__pycache__/
+*.pyc

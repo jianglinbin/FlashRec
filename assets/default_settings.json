@@ -1,0 +1,19 @@
+{
+  "log": { "level": "info", "trace_http_body": false, "http_entry": false, "soap_inbox": false },
+  "dlna": {
+    "port": 49152,
+    "auto_play_on_set_uri": true,
+    "progress_retention_sec": 60,
+    "friendly_name": "FlashRec 投屏接收",
+    "skin": "fluent"
+  },
+  "ui": {
+    "show_info": false,
+    "show_fps": false,
+    "show_video_fps": false,
+    "cast_auto_fullscreen": false,
+    "window": { "prefer": "last", "monitors": [] }
+  },
+  "live": { "reconnect_max": 3 },
+  "clipboard": { "play": true }
+}

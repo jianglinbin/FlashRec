@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="utf-8"?>
+<scpd xmlns="urn:schemas-upnp-org:service-1-0">
+  <specVersion><major>1</major><minor>0</minor></specVersion>
+  <actionList>
+    <action><name>ListPresets</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>CurrentPresetNameList</name><direction>out</direction><relatedStateVariable>PresetNameList</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SelectPreset</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>PresetName</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_PresetName</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetVolume</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentVolume</name><direction>out</direction><relatedStateVariable>Volume</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetVolume</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredVolume</name><direction>in</direction><relatedStateVariable>Volume</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetMute</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentMute</name><direction>out</direction><relatedStateVariable>Mute</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetMute</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredMute</name><direction>in</direction><relatedStateVariable>Mute</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetVolumeDB</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentVolume</name><direction>out</direction><relatedStateVariable>VolumeDB</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetVolumeDB</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredVolume</name><direction>in</direction><relatedStateVariable>VolumeDB</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetVolumeDBRange</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>MinValue</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_MinValue</relatedStateVariable></argument>
+        <argument><name>MaxValue</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_MaxValue</relatedStateVariable></argument>
+      </argumentList></action>
+    <!-- d133：显示类 9 组 Get/Set（Brightness / Contrast / Sharpness / ColorTemperature /
+         Red·Green·BlueVideoGain / Horizontal·VerticalKeystone）。
+         实现早就有（soap_util 的 RcDisplay，SPEC §1.2.7"能给默认值绝不回错误"），
+         **但 SCPD 一个都没宣告** ⇒ 控制点按 SCPD 建表时看不到这些能力，等于没实现。
+         官方 RCS:1 里这些是可选控制项，此处只宣告我们确实实现的部分（VideoBlackLevel /
+         Loudness 未实现，故不宣告）。 -->
+    <action><name>GetBrightness</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentBrightness</name><direction>out</direction><relatedStateVariable>Brightness</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetBrightness</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredBrightness</name><direction>in</direction><relatedStateVariable>Brightness</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetContrast</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentContrast</name><direction>out</direction><relatedStateVariable>Contrast</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetContrast</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredContrast</name><direction>in</direction><relatedStateVariable>Contrast</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetSharpness</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentSharpness</name><direction>out</direction><relatedStateVariable>Sharpness</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetSharpness</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredSharpness</name><direction>in</direction><relatedStateVariable>Sharpness</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetColorTemperature</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentColorTemperature</name><direction>out</direction><relatedStateVariable>ColorTemperature</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetColorTemperature</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredColorTemperature</name><direction>in</direction><relatedStateVariable>ColorTemperature</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetRedVideoGain</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentRedVideoGain</name><direction>out</direction><relatedStateVariable>RedVideoGain</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetRedVideoGain</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredRedVideoGain</name><direction>in</direction><relatedStateVariable>RedVideoGain</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetGreenVideoGain</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentGreenVideoGain</name><direction>out</direction><relatedStateVariable>GreenVideoGain</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetGreenVideoGain</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredGreenVideoGain</name><direction>in</direction><relatedStateVariable>GreenVideoGain</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetBlueVideoGain</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentBlueVideoGain</name><direction>out</direction><relatedStateVariable>BlueVideoGain</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetBlueVideoGain</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredBlueVideoGain</name><direction>in</direction><relatedStateVariable>BlueVideoGain</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetHorizontalKeystone</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentHorizontalKeystone</name><direction>out</direction><relatedStateVariable>HorizontalKeystone</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetHorizontalKeystone</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredHorizontalKeystone</name><direction>in</direction><relatedStateVariable>HorizontalKeystone</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>GetVerticalKeystone</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>CurrentVerticalKeystone</name><direction>out</direction><relatedStateVariable>VerticalKeystone</relatedStateVariable></argument>
+      </argumentList></action>
+    <action><name>SetVerticalKeystone</name>
+      <argumentList>
+        <argument><name>InstanceID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable></argument>
+        <argument><name>Channel</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Channel</relatedStateVariable></argument>
+        <argument><name>DesiredVerticalKeystone</name><direction>in</direction><relatedStateVariable>VerticalKeystone</relatedStateVariable></argument>
+      </argumentList></action>
+  </actionList>
+  <serviceStateTable>
+    <stateVariable sendEvents="yes"><name>LastChange</name><dataType>string</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>Volume</name><dataType>ui2</dataType>
+      <allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+    <stateVariable sendEvents="no"><name>Mute</name><dataType>boolean</dataType></stateVariable>
+    <stateVariable sendEvents="no"><name>VolumeDB</name><dataType>i2</dataType>
+      <allowedValueRange><minimum>-6000</minimum><maximum>0</maximum><step>1</step></allowedValueRange></stateVariable>
+    <stateVariable sendEvents="no"><name>PresetNameList</name><dataType>string</dataType>
+      <defaultValue>FactoryDefaults</defaultValue></stateVariable>
+    <!-- d133：显示类状态变量（默认值 = soap_util 的 RcDisplay 初值：可调项 100、增益/梯形 0） -->
+    <stateVariable sendEvents="no"><name>Brightness</name><dataType>ui2</dataType>
+      <allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+    <stateVariable sendEvents="no"><name>Contrast</name><dataType>ui2</dataType>
+      <allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+    <stateVariable sendEvents="no"><name>Sharpness</name><dataType>ui2</dataType>
+      <allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+    <stateVariable sendEvents="no"><name>ColorTemperature</name><dataType>ui2</dataType>
+      <allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+    <stateVariable sendEvents="no"><name>RedVideoGain</name><dataType>ui2</dataType>
+      <allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+    <stateVariable sendEvents="no"><name>GreenVideoGain</name><dataType>ui2</dataType>
+      <allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+    <stateVariable sendEvents="no"><name>BlueVideoGain</name><dataType>ui2</dataType>
+      <allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+    <stateVariable sendEvents="no"><name>HorizontalKeystone</name><dataType>i2</dataType>
+      <allowedValueRange><minimum>-100</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+    <stateVariable sendEvents="no"><name>VerticalKeystone</name><dataType>i2</dataType>
+      <allowedValueRange><minimum>-100</minimum><maximum>100</maximum><step>1</step></allowedValueRange></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_InstanceID</name><dataType>ui4</dataType>
+      <defaultValue>0</defaultValue></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_Channel</name><dataType>string</dataType>
+      <allowedValueList><allowedValue>Master</allowedValue></allowedValueList></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_MinValue</name><dataType>string</dataType>
+      <defaultValue>-6000</defaultValue></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_MaxValue</name><dataType>string</dataType>
+      <defaultValue>0</defaultValue></stateVariable>
+    <stateVariable sendEvents="no"><name>A_ARG_TYPE_PresetName</name><dataType>string</dataType>
+      <allowedValueList><allowedValue>FactoryDefaults</allowedValue></allowedValueList></stateVariable>
+  </serviceStateTable>
+</scpd>
