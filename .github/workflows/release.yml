@@ -2,7 +2,7 @@ name: build-packages
 
 # 四件安装包：Windows zip + setup.exe、Linux deb + AppImage。
 # - 手动触发：只构建 + 上传 Actions artifact（用于验证）。
-# - push tag v*：两个平台都成功后，把**四件一起**挂到 GitHub Release（规则 12 全平台齐发）。
+# - push tag v*：两个平台都成功后，把四件一起挂到 GitHub Release（规则 12 全平台齐发）。
 on:
   workflow_dispatch:
   push:
@@ -11,17 +11,21 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: build-packages-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: ilammy/msvc-dev-cmd@v1        # 装好 cl + INCLUDE/LIB/PATH
+      - uses: ilammy/msvc-dev-cmd@v1
 
-      # 用 vswhere 定位 VS/SDK，导出 FR_*（msvc_env.sh 会优先采用，见 d187）
       - name: Locate MSVC/SDK
         shell: bash
         run: |
@@ -32,8 +36,7 @@ jobs:
           VS=$(cygpath -m "$VS")
           MSVC=$(ls -1d "$VS"/VC/Tools/MSVC/* | sort -V | tail -1)
           SDKROOT="C:/Program Files (x86)/Windows Kits/10"
-          # ⚠️ 不能用 `xargs basename`：路径含空格会被切成多词，写 GITHUB_ENV 会变裸行导致
-          # "Invalid format 'Files'"（首次 CI 实测踩过）。用 basename "$var" 处理含空格路径。
+          # 不用 xargs basename（路径含空格会被切词，写 GITHUB_ENV 变裸行）。
           SDKVER=$(basename "$(ls -1d "$SDKROOT"/Include/10.* | sort -V | tail -1)")
           {
             printf 'FR_MSVC=%s\n' "$MSVC"
@@ -47,15 +50,26 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "VS=$VS MSVC=$MSVC SDK=$SDKVER"
 
+      # 缓存：third_party（含 mpv/pthreads4w）+ 构建目录 + Inno 工具，重跑提速
+      - name: Cache third_party/build/tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party
+            build-rel
+            build-pthreads
+            dist/.tools
+          key: win-deps-${{ hashFiles('tools/fetch_deps.sh', 'tools/fetch_mpv.py', 'CMakeLists.txt') }}
+          restore-keys: win-deps-
+
       - name: Fetch third-party deps
         shell: bash
         run: bash tools/fetch_deps.sh
 
-      # Windows 额外依赖：pthreads4w（fetch_deps 不管，CMake 需要其 install 前缀）
       - name: Build pthreads4w
         shell: bash
         run: |
-          [ -d third_party/pthreads4w/install ] && exit 0
+          [ -d third_party/pthreads4w/install ] && { echo "pthreads4w 已缓存，跳过"; exit 0; }
           git clone --depth 1 https://github.com/Vollstrecker/pthreads4w.git third_party/pthreads4w
           "$FR_CMAKE" -S "$(cygpath -m "$PWD/third_party/pthreads4w")" -B build-pthreads -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -67,6 +81,7 @@ jobs:
 
       - name: Package Windows
         shell: bash
+        timeout-minutes: 30
         run: bash tools/package_windows.sh
 
       - uses: actions/upload-artifact@v4
@@ -79,6 +94,7 @@ jobs:
 
   linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install build deps
@@ -86,9 +102,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build patchelf wget dpkg-dev pkg-config \
             libmpv-dev libsystemd-dev python3 python3-venv
+      - name: Cache third_party/build/tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party
+            build-pkg
+            dist/.appimage
+          key: linux-deps-${{ hashFiles('tools/fetch_deps.sh', 'CMakeLists.txt') }}
+          restore-keys: linux-deps-
       - name: Fetch third-party deps
         run: bash tools/fetch_deps.sh
       - name: Package Linux (deb + AppImage)
+        timeout-minutes: 20
         run: bash tools/package_linux.sh
       - uses: actions/upload-artifact@v4
         with:
