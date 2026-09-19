@@ -8,14 +8,13 @@ C++20 + 自绘 UI（nanovg / GLFW），Windows 与 Linux 一等公民。
 
 ## 界面预览
 
-播放态界面（无边框 + 上下贴边半透明栏 + 不操作自动隐去 + 悬停时间线出缩略图），7 套内置皮肤只替换颜色与圆角 token，布局完全一致：
+实际运行截图（默认皮肤「暗灰橙」，播放态：无边框 + 上下贴边栏 + 不操作自动隐去）：
 
-|  |  |
-|:---:|:---:|
-| ![北境·雪](docs/img/skins/nord-snow.png)<br>**北境·雪** · 白底靛蓝，清爽圆角 | ![北境·冰](docs/img/skins/nord-frost.png)<br>**北境·冰** · 冰蓝直角，冷冽 |
-| ![北境·霞](docs/img/skins/nord-rose.png)<br>**北境·霞** · 粉底玫红，柔和 | ![北境·紫](docs/img/skins/nord-iris.png)<br>**北境·紫** · 紫底罗兰，大圆角 |
-| ![北境·夜](docs/img/skins/nord-night.png)<br>**北境·夜** · 极夜深灰 + 冰蓝 | ![北境·林](docs/img/skins/nord-forest.png)<br>**北境·林** · 绿底林绿，小圆角 |
-| ![暗灰橙](docs/img/skins/ubuntu-orange.png)<br>**暗灰橙** · GNOME 深灰 + Ubuntu 橙（默认） | 把自定义皮肤 JSON 放进用户皮肤目录 `skins/`，托盘「重载皮肤」即可热加载 |
+<p align="center">
+  <img src="docs/img/ui-preview.png" alt="FlashRec 播放态界面" width="640">
+</p>
+
+7 套内置皮肤只替换颜色与圆角 token，布局完全一致；把自定义皮肤 JSON 放进用户皮肤目录 `skins/`，托盘「重载皮肤」即可热加载。
 
 ## 下载
 
