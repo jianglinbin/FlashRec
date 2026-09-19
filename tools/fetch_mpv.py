@@ -19,6 +19,13 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# CI/Windows 控制台默认非 UTF-8，打印中文会 UnicodeEncodeError（实测 CI 踩过）→ 强制 UTF-8。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+except Exception:
+    pass
+
 ROOT = Path(__file__).resolve().parent.parent
 DEST = ROOT / "third_party" / "mpv"
 TAR = r"C:\Windows\system32\tar.exe"

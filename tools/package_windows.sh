@@ -125,6 +125,16 @@ INNO_URL="https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innoset
 ZH_LANG="$INNO_DIR/Languages/ChineseSimplified.isl"
 
 ensure_inno() {
+  # d188：优先用**现成 ISCC**（CI 用 choco 预装；见 workflow）。
+  # 背景：在无桌面会话的 CI runner 里跑 Inno Setup 官方安装器会**挂死**
+  #（实测超时后残留 innosetup-6.7.3 / .tmp 孤儿进程），故 CI 侧不跑安装器。
+  if [ -n "${FR_ISCC:-}" ] && [ -x "$FR_ISCC" ]; then
+    ISCC="$FR_ISCC"
+    INNO_DIR="$(dirname "$FR_ISCC")"
+    ZH_LANG="$INNO_DIR/Languages/ChineseSimplified.isl"
+    log "    ISCC 就位（预装：$ISCC）"
+    return 0
+  fi
   [ -x "$ISCC" ] && return 0
   log "准备 Inno Setup 6（下载到 dist/.tools/，之后复用）"
   mkdir -p "$DIST/.tools"

@@ -50,6 +50,19 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "VS=$VS MSVC=$MSVC SDK=$SDKVER"
 
+      # d188：CI 侧用 choco 预装 Inno Setup（脚本内跑官方安装器会在无桌面会话挂死）
+      - name: Install Inno Setup (choco)
+        shell: bash
+        run: |
+          choco install innosetup --no-progress -y
+          ISCC="C:/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          if [ -x "$ISCC" ]; then
+            printf 'FR_ISCC=%s\n' "$ISCC" >> "$GITHUB_ENV"
+            echo "Inno OK: $ISCC"
+          else
+            echo "::warning::choco 未装出 ISCC，将回退脚本内下载（可能很慢）"
+          fi
+
       # 缓存：third_party（含 mpv/pthreads4w）+ 构建目录 + Inno 工具，重跑提速
       - name: Cache third_party/build/tools
         uses: actions/cache@v4

@@ -31,6 +31,7 @@ wait
 # glad：GL 3.3 核心加载器（pip 装生成器后离线生成）
 # d187：python 不再写死 —— 优先 FR_PYTHON，其次 PATH 上的 python/python3（CI 友好）。
 PY="${FR_PYTHON:-$(command -v python || command -v python3 || true)}"
+export PYTHONIOENCODING=utf-8  # d188：避免 CI 非 UTF-8 控制台打印中文崩溃
 # 默认走官方 PyPI（CI 在境外；本机可用 FR_PIP_INDEX 覆盖为清华镜像）
 PIP_INDEX="${FR_PIP_INDEX:-https://pypi.org/simple}"
 if [ -f "third_party/glad/include/glad/gl.h" ]; then
