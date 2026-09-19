@@ -339,6 +339,8 @@ const ColRef kCols[] = {
     {"winCloseHoverIcon", &Theme::winCloseHoverIcon},
     {"btnHoverBg", &Theme::btnHoverBg},
     {"btnPressBg", &Theme::btnPressBg},
+    {"btnBg", &Theme::btnBg},  // d201 按钮常态底色
+    {"btnFg", &Theme::btnFg},  // d201 按钮前景
     {"muteIcon", &Theme::muteIcon},
     {"muteTrack", &Theme::muteTrack},
     {"muteKnob", &Theme::muteKnob},
@@ -356,6 +358,12 @@ const ColRef kCols[] = {
     {"previewTimeBg", &Theme::previewTimeBg},
     {"previewTimeText", &Theme::previewTimeText},
     {"stageBg", &Theme::stageBg},
+    {"stageBorder", &Theme::stageBorder},  // d193 视频区内嵌浮卡外描边
+    {"stageText", &Theme::stageText},        // d220 舞台主文字色
+    {"stageSubText", &Theme::stageSubText},  // d220 舞台次文字色
+    {"winBorder", &Theme::winBorder},      // d198 窗口外框
+    {"topBarBorder", &Theme::topBarBorder},  // d198 标题栏四边
+    {"botBarBorder", &Theme::botBarBorder},  // d198 操作栏四边
 };
 
 void apply_colors(Theme* t, const JVal& colors, const char* ctx,
@@ -425,6 +433,9 @@ void apply_layout(Theme* t, const JVal& layout, const char* ctx,
   num_field(layout, {"bottomBar", "button", "boxSize"}, &l.btnBoxW, ctx, warns);
   num_field(layout, {"bottomBar", "button", "radius"}, &l.btnRadius, ctx, warns);
   num_field(layout, {"bottomBar", "button", "pitch"}, &l.btnPitch, ctx, warns);
+  num_field(layout, {"bottomBar", "button", "iconSize"}, &l.btnIcon, ctx, warns);  // d204
+  if (const JVal* v = dig(layout, {"bottomBar", "button", "circle"}))
+    if (v->t == JVal::Bool) l.btnCircle = v->b;  // d204：底栏按钮圆形开关
   num_field(layout, {"progress", "trackHeight"}, &l.trackH, ctx, warns);
   num_field(layout, {"progress", "radius"}, &t->shape.progressRadius, ctx, warns);
   num_field(layout, {"progress", "knobSize"}, &l.knobSize, ctx, warns);
@@ -449,9 +460,12 @@ void apply_layout(Theme* t, const JVal& layout, const char* ctx,
   num_field(layout, {"speedControl", "menuPadY"}, &l.speedMenuPadY, ctx, warns);
   num_field(layout, {"playButtonCenter", "size"}, &l.centerBtnSize, ctx, warns);
   num_field(layout, {"playButtonCenter", "iconSize"}, &l.centerIconSize, ctx, warns);
+  num_field(layout, {"border", "width"}, &l.borderWidth, ctx, warns);  // d198 三区块描边宽度
   // motion：毫秒 → 秒
   if (const JVal* v = dig(layout, {"motion", "idleHideMs"}))
     if (v->t == JVal::Num) l.idleHideSec = v->n / 1000.0;
+  if (const JVal* v = dig(layout, {"motion", "barHoverHideMs"}))
+    if (v->t == JVal::Num) l.barHoverHideSec = v->n / 1000.0;
   if (const JVal* v = dig(layout, {"motion", "fadeMs"}))
     if (v->t == JVal::Num) l.fadeSec = v->n / 1000.0;
   if (const JVal* v = dig(layout, {"motion", "hoverFadeMs"}))
@@ -462,6 +476,37 @@ void apply_layout(Theme* t, const JVal& layout, const char* ctx,
     if (v->t == JVal::Num) l.btnPressScale = static_cast<float>(v->n);
   if (const JVal* v = dig(layout, {"motion", "dblClickMs"}))
     if (v->t == JVal::Num) l.dblClickSec = v->n / 1000.0;
+}
+
+// d193：视频区内嵌浮卡（stage: { inset, radius, border }）。inset>0 时画面收进内缩
+// 圆角卡、卡外露 stageBg，border 为卡片描边（透明则不画）。
+void apply_stage(Theme* t, const JVal& stage, const char* ctx, std::vector<std::string>* warns) {
+  if (stage.t != JVal::Obj) return;
+  num_field(stage, {"inset"}, &t->layout.stageInset, ctx, warns);
+  num_field(stage, {"radius"}, &t->layout.stageRadius, ctx, warns);
+  if (const JVal* v = stage.get("border")) {
+    if (v->t != JVal::Str) {
+      if (warns) warns->push_back(std::string(ctx) + ".stage.border: 非字符串");
+    } else {
+      NVGcolor c{};
+      if (parse_color_checked(v->s, &c))
+        t->stageBorder = c;
+      else if (warns)
+        warns->push_back(std::string(ctx) + ".stage.border: 颜色非法，保留默认");
+    }
+  }
+  // fit: "cover"（短边填满/裁切）| "contain"（留边）—— 对应 mpv panscan
+  if (const JVal* v = stage.get("fit")) {
+    if (v->t != JVal::Str) {
+      if (warns) warns->push_back(std::string(ctx) + ".stage.fit: 非字符串");
+    } else if (v->s == "cover") {
+      t->layout.stageCover = true;
+    } else if (v->s == "contain") {
+      t->layout.stageCover = false;
+    } else if (warns) {
+      warns->push_back(std::string(ctx) + ".stage.fit: 需 cover|contain，保留默认");
+    }
+  }
 }
 
 std::string read_file(const std::string& path, bool* ok) {
@@ -551,6 +596,7 @@ static bool bundle_internal(const std::string& path, const Theme& base,
     if (const JVal* sh = s.get("shape")) apply_shape(&nt.theme, *sh, ctx.c_str(), warns);
     if (const JVal* co = s.get("colors")) apply_colors(&nt.theme, *co, ctx.c_str(), warns);
     if (const JVal* lo = s.get("layout")) apply_layout(&nt.theme, *lo, ctx.c_str(), warns);
+    if (const JVal* st = s.get("stage")) apply_stage(&nt.theme, *st, ctx.c_str(), warns);
     out->push_back(std::move(nt));
   }
   if (layout_base_out) *layout_base_out = layout_base;
@@ -621,6 +667,7 @@ bool load_skin_file(const std::string& path, const Theme& base, NamedTheme* out,
   if (const JVal* sh = root.get("shape")) apply_shape(&out->theme, *sh, "skin", warns);
   if (const JVal* co = root.get("colors")) apply_colors(&out->theme, *co, "skin", warns);
   if (const JVal* lo = root.get("layout")) apply_layout(&out->theme, *lo, "skin", warns);
+  if (const JVal* st = root.get("stage")) apply_stage(&out->theme, *st, "skin", warns);
   return true;
 }
 

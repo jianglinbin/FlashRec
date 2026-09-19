@@ -20,11 +20,16 @@ bool dmg_hit(const DmgRect* clip, float x, float y, float w, float h) {
          y < (float)(clip->y + clip->h) && y + h > (float)clip->y;
 }
 
-void dmg_scissor_begin(NVGcontext* vg, int win_h, const DmgRect& r) {
+void dmg_scissor_begin(NVGcontext* vg, const DmgRect& r, int fb_h, float sx, float sy) {
   glEnable(GL_SCISSOR_TEST);
-  // 本项目窗口尺寸 == framebuffer 尺寸（render_loop glViewport 用同一 w/h），
-  // 逻辑像素即物理像素；y 翻转换算唯一入口 gl_scissor_y（damage.h）。
-  glScissor(r.x, gl_scissor_y(win_h, r), r.w, r.h);
+  // 逻辑 rect → 物理 rect（四舍五入取整，GL scissor 用物理像素；y 翻转换算唯一入口
+  // gl_scissor_y）。sx/sy=1 时与原实现逐像素一致。
+  const int px = (int)std::lround((float)r.x * sx);
+  const int py = (int)std::lround((float)r.y * sy);
+  const int px2 = (int)std::lround((float)(r.x + r.w) * sx);
+  const int py2 = (int)std::lround((float)(r.y + r.h) * sy);
+  const DmgRect phys{px, py, px2 - px, py2 - py};
+  glScissor(phys.x, gl_scissor_y(fb_h, phys), phys.w, phys.h);
   // nanovg 侧同步裁剪（逻辑坐标）：把 nanovg 自身状态也压到脏区内，
   // 与 GL 硬边界互为冗余；内部既有 win_clip_rect 的求交语义不冲突（只会更严）。
   nvgScissor(vg, (float)r.x, (float)r.y, (float)r.w, (float)r.h);
@@ -35,8 +40,8 @@ void dmg_scissor_end(NVGcontext* vg) {
   glDisable(GL_SCISSOR_TEST);
 }
 
-void begin_frame(NVGcontext* vg, int w, int h) {
-  nvgBeginFrame(vg, (float)w, (float)h, 1.0f);
+void begin_frame(NVGcontext* vg, int w, int h, float pixel_ratio) {
+  nvgBeginFrame(vg, (float)w, (float)h, pixel_ratio > 0.f ? pixel_ratio : 1.f);
 }
 
 void end_frame(NVGcontext* vg) { nvgEndFrame(vg); }
@@ -135,15 +140,11 @@ void text_truncated(NVGcontext* vg, const Theme& t, float x, float y, float size
 void circle_btn(NVGcontext* vg, const Theme& t, float cx, float cy, float d, NVGcolor bg,
                 NVGcolor border, NVGcolor icon) {
   (void)t;
+  (void)border;  // d215：描边线一律去掉（不再画播放键外框）
   nvgBeginPath(vg);
   nvgCircle(vg, cx, cy, d * 0.5f);
   nvgFillColor(vg, bg);
   nvgFill(vg);
-  if (border.a > 0.001f) {
-    nvgStrokeWidth(vg, 1.f);
-    nvgStrokeColor(vg, border);
-    nvgStroke(vg);
-  }
   (void)icon;  // 图标由调用方随后用 icon_* 绘制
 }
 
@@ -216,6 +217,8 @@ float btn_bg(NVGcontext* vg, const Theme& t, float cx, float cy, float d, float 
   const float bw = box * k;
   // d182 形状 token：btnCircle=true → 圆；否则按 btnRadius（mono 直角为 0）
   const float r = (t.layout.btnCircle ? box * 0.5f : t.layout.btnRadius) * k;
+  if (t.btnBg.a > 0.004f)  // d201 常态底色（透明=不画）
+    rounded_rect(vg, cx - bw * 0.5f, cy - bw * 0.5f, bw, bw, r, t.btnBg);
   if (st.hover > 0.004f) {
     NVGcolor c = t.btnHoverBg;
     c.a *= st.hover;
@@ -240,6 +243,8 @@ float pill_btn_bg(NVGcontext* vg, const Theme& t, float cx, float cy, float w, f
   const float k = 1.f - (1.f - t.layout.btnPressScale) * st.press;
   const float bw = w * k, bh = h * k;
   const float r = t.layout.btnRadius * k;
+  if (t.btnBg.a > 0.004f)  // d201 常态底色（透明=不画）
+    rounded_rect(vg, cx - bw * 0.5f, cy - bh * 0.5f, bw, bh, r, t.btnBg);
   if (st.hover > 0.004f) {
     NVGcolor c = t.btnHoverBg;
     c.a *= st.hover;
@@ -255,6 +260,7 @@ float pill_btn_bg(NVGcontext* vg, const Theme& t, float cx, float cy, float w, f
 
 NVGcolor btn_icon_color(const Theme& t, const BtnState& st) {
   if (!st.enabled) return t.iconDisabled;
+  if (t.btnFg.a > 0.004f) return t.btnFg;  // d201 单一前景色（显式设置时优先）
   return nvgLerpRGBA(t.iconDim, t.icon, st.hover);
 }
 

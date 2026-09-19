@@ -4,6 +4,8 @@
 #include <thread>   // d91
 #include <vector>   // d186：DDC/CI 物理显示器枚举
 
+#include <cmath>    // d210：std::lround（DIP = 物理 / contentScale）
+
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #ifdef _WIN32
@@ -392,6 +394,13 @@ bool WindowGLFW::create(int w, int h, const char* title) {
   // 必须在 glfwInit() 之前设置（init hint 只在初始化时读取一次）。
   glfwInitHint(GLFW_WAYLAND_LIBDECOR, GLFW_WAYLAND_DISABLE_LIBDECOR);
 #endif
+  // d210：声明 **per-monitor DPI aware v2**（必须先于任何窗口创建）。默认进程是
+  // "DPI 不感知"：4K/高 DPI（150/200%）下 Windows 会把窗口整体位图拉伸，GLFW 也拿不到
+  // 真实 content scale ⇒ UI 不会随分辨率/缩放放大、且发虚。声明后：逻辑尺寸(DIP) 与
+  // framebuffer(物理) 分离，render_loop 用 pixel_ratio 把 DIP 放大到设备像素（与 Chrome 同构）。
+#ifdef _WIN32
+  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+#endif
   if (!glfwInit()) {
     FR_LOG_ERROR("[UI] glfwInit 失败");
     return false;
@@ -441,6 +450,15 @@ bool WindowGLFW::create(int w, int h, const char* title) {
   }
   glfwMakeContextCurrent(win_);
   glfwSwapInterval(1);  // vsync
+  // d210：把逻辑尺寸 / framebuffer / DPI 缩放打进日志（高 DPI 尺寸问题一行定位）
+  {
+    int fw = 0, fh = 0;
+    float sx = 1.f, sy = 1.f;
+    glfwGetFramebufferSize(win_, &fw, &fh);
+    glfwGetWindowContentScale(win_, &sx, &sy);
+    FR_LOG_INFO("[UI] 逻辑={}x{} framebuffer={}x{} contentScale={}x{}（pixelRatio={}, dipScale={}）",
+                logical_width(), logical_height(), fw, fh, sx, sy, pixel_ratio(), dip_scale());
+  }
 
 #ifdef _WIN32
   // 无边框窗口的边缘缩放：GLFW 不提供，只有子类化 WM_NCHITTEST 一条路
@@ -626,11 +644,31 @@ int WindowGLFW::height() const {
 }
 
 float WindowGLFW::content_scale() const {
-  // 当前 UI 的坐标系 = 未缩放 framebuffer 物理像素（无 DPI 缩放渲染），交互阈值
-  // 与 GetSystemMetrics 同口径、无需折算 —— 本访问器暂为预留（d68）。
   float xs = 1.f, ys = 1.f;
   if (win_) glfwGetWindowContentScale(win_, &xs, &ys);
   return xs > 0.f ? xs : 1.f;
+}
+
+int WindowGLFW::logical_width() const {
+  // Windows 上 GLFW 的 window size == framebuffer == 物理像素；DIP = 物理 / contentScale。
+  const float s = content_scale();
+  const int fw = width();
+  return (s > 0.01f && fw > 0) ? (int)std::lround((float)fw / s) : fw;
+}
+
+int WindowGLFW::logical_height() const {
+  const float s = content_scale();
+  const int fh = height();
+  return (s > 0.01f && fh > 0) ? (int)std::lround((float)fh / s) : fh;
+}
+
+float WindowGLFW::pixel_ratio() const { return content_scale(); }
+
+float WindowGLFW::dip_scale() const {
+  int ww = 0, wh = 0;
+  if (win_) glfwGetWindowSize(win_, &ww, &wh);
+  const int lw = logical_width();
+  return (ww > 0 && lw > 0) ? (float)lw / (float)ww : 1.f;
 }
 
 bool WindowGLFW::maximized() const {

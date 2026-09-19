@@ -127,6 +127,10 @@ void PlayerController::set_panscan(double p) {
   if (mpv_) mpv_->set_panscan(p);
 }
 
+void PlayerController::set_background_color(const std::string& rgb_hex) {
+  if (mpv_) mpv_->set_background_color(rgb_hex);
+}
+
 // ---------------- 指令处理 ----------------
 
 void PlayerController::on_command(const DmrCommand& cmd) {

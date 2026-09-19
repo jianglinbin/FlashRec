@@ -289,6 +289,7 @@ Config Config::load(const std::string& path) {
   cfg.friendly_name =
       get("dlna.friendly_name") ? *get("dlna.friendly_name") : cfg.friendly_name;
   cfg.skin = get("ui.skin") ? *get("ui.skin") : cfg.skin;
+  // 已退役皮肤 id（frost/paper-min/amber/teal/neon/mono 等）由 loader 按"不在包内→回落默认"处理。
   cfg.ui_show_fps = get_bool("ui.show_fps", cfg.ui_show_fps);
   cfg.ui_show_video_fps = get_bool("ui.show_video_fps", cfg.ui_show_video_fps);
   cfg.ui_show_info = get_bool("ui.show_info", cfg.ui_show_info);

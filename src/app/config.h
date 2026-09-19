@@ -27,7 +27,7 @@ struct Config {
   bool dlna_auto_play_on_set_uri = true;       // R1：默认自动开播
   int dlna_progress_retention_sec = 60;        // R5：退出投屏进度保持期
   std::string friendly_name = "FlashRec 投屏接收";
-  std::string skin = "fluent";                 // fluent/frost/amber/teal/neon/mono
+  std::string skin = "ubuntu-orange";          // 默认皮肤：暗灰橙（JSON 驱动）
   bool clipboard_play = true;                  // d74：剪贴板链接探测 → 提示条（clipboard.play）
   bool ui_show_fps = false;                    // d44：UI 渲染帧率常驻（诊断；老配置键保留，决策点 7）
   bool ui_show_video_fps = false;              // d44：视频播放帧率常驻（老配置键保留，决策点 7）

@@ -1,5 +1,10 @@
 {
-  "log": { "level": "info", "trace_http_body": false, "http_entry": false, "soap_inbox": false },
+  "log": {
+    "level": "info",
+    "trace_http_body": false,
+    "http_entry": false,
+    "soap_inbox": false
+  },
   "dlna": {
     "port": 49152,
     "auto_play_on_set_uri": true,
@@ -12,9 +17,20 @@
     "show_fps": false,
     "show_video_fps": false,
     "cast_auto_fullscreen": false,
-    "window": { "prefer": "last", "monitors": [] }
+    "window": {
+      "prefer": "last",
+      "monitors": []
+    },
+    "skin": "ubuntu-orange"
   },
-  "live": { "reconnect_max": 3 },
-  "player": { "volume": 100, "muted": false },
-  "clipboard": { "play": true }
+  "live": {
+    "reconnect_max": 3
+  },
+  "player": {
+    "volume": 100,
+    "muted": false
+  },
+  "clipboard": {
+    "play": true
+  }
 }

@@ -32,8 +32,10 @@ PrivilegesRequired=lowest
 ; 产物只有 x64
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-; 刻意不设 SetupIconFile：assets/icons 只有 png 而 Inno 要 .ico，先不引入转换步骤；
-; 卸载项图标直接用 exe 自身图标（flashrec.exe 的图标由 app.rc 注入）。
+; 安装程序自身的图标 + 卸载项图标都取 ico：assets/icons/app.ico 随包进暂存目录
+; （__FR_SOURCE__\assets\icons\app.ico）。快捷方式图标不需要 IconFilename —— Inno 默认
+; 取目标 exe 的图标，而 flashrec.exe 的内嵌图标由 src/platform/app.rc 注入（d193）。
+SetupIconFile=__FR_SOURCE__\assets\icons\app.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName} __FR_VERSION__
 Compression=lzma2/max

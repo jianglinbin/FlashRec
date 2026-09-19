@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 # 版本号是打包的唯一来源（deb 文件名 / CPack 元数据 / .desktop）；改版本先改这里，
 # 且必须与 ledger/INDEX.md 中状态为「进行中」的版本一致。
-project(FlashRec VERSION 0.5.2 LANGUAGES C CXX)
+project(FlashRec VERSION 0.5.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,6 +59,7 @@ set(FR_SOURCES
 )
 if (WIN32)
   list(APPEND FR_SOURCES src/platform/tray_win32.cpp)  # 托盘（d81）：Shell_NotifyIcon + 原生菜单
+  list(APPEND FR_SOURCES src/platform/app.rc)          # d193：exe 内嵌图标（快捷方式/任务栏取它）
 else()
   list(APPEND FR_SOURCES src/platform/tray_linux.cpp)    # 托盘入口（d84）：SNI 优先 + XEmbed 兜底
   list(APPEND FR_SOURCES src/platform/tray_xembed_linux.cpp)

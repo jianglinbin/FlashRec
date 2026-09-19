@@ -114,6 +114,9 @@ class MpvBridge {
   void set_speed(double s);  // d169：倍速（mpv speed 属性；1.0 = 原速）
   // d184：视频填充 —— cover=1（短边填满/居中/裁切，不变型无空白）/ contain=0（留黑边）
   void set_panscan(double p);
+  // d196：letterbox/留边底色 = 皮肤 stageBg（mpv background-color）。不设的话 contain 时
+  // 留边恒为 mpv 默认黑，与浅色/彩色皮肤冲突。
+  void set_background_color(const std::string& rgb_hex);
 
   // —— 查询（主线程）——
   double get_time_pos();
@@ -150,6 +153,8 @@ class MpvBridge {
   std::string last_uri_;
   // d184：视频填充（panscan）= cover|contain 映射；load 时应用。
   double panscan_ = 1.0;
+  // d196：留边底色 "#rrggbb"；load 时应用。
+  std::string bg_color_ = "#000000";
 };
 
 }  // namespace fr

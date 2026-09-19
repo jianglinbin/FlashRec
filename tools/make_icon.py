@@ -50,6 +50,12 @@ def main():
         path = f"assets/icons/app_{size}.png"
         out.save(path)
         print("written", path)
+    # Windows exe 图标（多尺寸 ICO）：http 资源编译进 exe，桌面/开始菜单/任务栏快捷方式取它。
+    # 没有它，exe 无图标资源 → 快捷方式显示成"通用文档"（实测踩过）。
+    ico = "assets/icons/app.ico"
+    base.save(ico, format="ICO",
+              sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+    print("written", ico)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #pragma once
-// 自动生成：Theme 逐字段比较（避免 memcmp 的 padding 陷阱）。由 theme.h 生成，勿手改。
+// 自动生成：Theme 逐字段比较（避免 memcmp 的 padding 陷阱）。由 tools/gen_theme_compare.py 生成，勿手改。
 #include "ui/theme.h"
 
 namespace fr {
@@ -23,6 +23,8 @@ inline const char* theme_first_diff(const Theme& a, const Theme& b) {
   if (!C(a.winCloseHoverBg, b.winCloseHoverBg)) return "winCloseHoverBg";
   if (!C(a.winClosePressBg, b.winClosePressBg)) return "winClosePressBg";
   if (!C(a.winCloseHoverIcon, b.winCloseHoverIcon)) return "winCloseHoverIcon";
+  if (!C(a.btnBg, b.btnBg)) return "btnBg";
+  if (!C(a.btnFg, b.btnFg)) return "btnFg";
   if (!C(a.btnHoverBg, b.btnHoverBg)) return "btnHoverBg";
   if (!C(a.btnPressBg, b.btnPressBg)) return "btnPressBg";
   if (!C(a.muteIcon, b.muteIcon)) return "muteIcon";
@@ -42,6 +44,12 @@ inline const char* theme_first_diff(const Theme& a, const Theme& b) {
   if (!C(a.previewTimeBg, b.previewTimeBg)) return "previewTimeBg";
   if (!C(a.previewTimeText, b.previewTimeText)) return "previewTimeText";
   if (!C(a.stageBg, b.stageBg)) return "stageBg";
+  if (!C(a.stageBorder, b.stageBorder)) return "stageBorder";
+  if (!C(a.stageText, b.stageText)) return "stageText";
+  if (!C(a.stageSubText, b.stageSubText)) return "stageSubText";
+  if (!C(a.winBorder, b.winBorder)) return "winBorder";
+  if (!C(a.topBarBorder, b.topBarBorder)) return "topBarBorder";
+  if (!C(a.botBarBorder, b.botBarBorder)) return "botBarBorder";
   if (a.shape.windowRadius != b.shape.windowRadius) return "shape.windowRadius";
   if (a.shape.progressRadius != b.shape.progressRadius) return "shape.progressRadius";
   if (a.shape.knobCircle != b.shape.knobCircle) return "shape.knobCircle";
@@ -106,7 +114,11 @@ inline const char* theme_first_diff(const Theme& a, const Theme& b) {
   if (a.layout.badgeOriginYWin != b.layout.badgeOriginYWin) return "layout.badgeOriginYWin";
   if (a.layout.titleIconGap != b.layout.titleIconGap) return "layout.titleIconGap";
   if (a.layout.stageCover != b.layout.stageCover) return "layout.stageCover";
+  if (a.layout.stageInset != b.layout.stageInset) return "layout.stageInset";
+  if (a.layout.stageRadius != b.layout.stageRadius) return "layout.stageRadius";
+  if (a.layout.borderWidth != b.layout.borderWidth) return "layout.borderWidth";
   if (a.layout.idleHideSec != b.layout.idleHideSec) return "layout.idleHideSec";
+  if (a.layout.barHoverHideSec != b.layout.barHoverHideSec) return "layout.barHoverHideSec";
   if (a.layout.fadeSec != b.layout.fadeSec) return "layout.fadeSec";
   if (a.layout.hoverFadeSec != b.layout.hoverFadeSec) return "layout.hoverFadeSec";
   if (a.layout.pressFadeSec != b.layout.pressFadeSec) return "layout.pressFadeSec";

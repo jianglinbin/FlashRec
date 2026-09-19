@@ -318,7 +318,7 @@ int main(int argc, char** argv) {
     int ok = 0, bad = 0;
     for (const auto& s : skin_pack) {
       bool builtin = false;
-      for (int i = 0; i < 6; i++)
+      for (int i = 0; i < Theme::kSkinCount; i++)
         if (s.meta.id == Theme::kSkinIds[i]) builtin = true;
       if (!builtin) continue;  // 用户皮肤不参与内置一致性自检
       const char* d = theme_first_diff(s.theme, Theme::get(s.meta.id));
@@ -380,6 +380,14 @@ int main(int argc, char** argv) {
     FR_LOG_ERROR("[APP] mpv 初始化失败（继续运行，投屏不可用）");
   }
   player.set_panscan(theme.layout.stageCover ? 1.0 : 0.0);  // d184：视频填充 cover 默认
+  // d196：留边底色 = 皮肤 stageBg（contain 时 letterbox 不再是 mpv 默认黑）
+  auto stage_bg_rgb = [](const NVGcolor& c) {
+    char b[8];
+    auto q = [](float v) { int x = (int)(v * 255.0f + 0.5f); return x < 0 ? 0 : (x > 255 ? 255 : x); };
+    std::snprintf(b, sizeof(b), "#%02x%02x%02x", q(c.r), q(c.g), q(c.b));
+    return std::string(b);
+  };
+  player.set_background_color(stage_bg_rgb(theme.stageBg));
   // d163：恢复持久化的音量/静音 —— 上次调好的音量跨重启保留。bilibili 投屏开始
   // 在 Play 后 ~1.5s 才推 SetVolume，恢复缺位的窗口期就是"默认 100 最响很炸"的那段。
   if (cfg.player_volume != 100 || cfg.player_muted) {
@@ -624,9 +632,26 @@ int main(int argc, char** argv) {
     render.wake();
   };
 
-  window.on_mouse_move = [&](double x, double y) {
+  window.on_mouse_move = [&](double xp, double yp) {
+    // d210：把 GLFW 光标换算到 UI 的 DIP 坐标。换算系数随平台不同（见 WindowGLFW::dip_scale）：
+    // Windows 光标是物理像素、需 /scale；Wayland 光标已是逻辑坐标、系数=1。命中/悬停/阈值随之对齐。
+    const double s = (double)window.dip_scale();
+    const double x = xp * s;
+    const double y = yp * s;
     in.mx = (float)x;
     in.my = (float)y;
+    // d222：全局屏幕坐标（物理像素）—— 拖拽/双击判定的唯一基准（免疫窗口几何跳变）。
+    // 取不到（Wayland 无 X11/合成器不公开）时回落为窗口内物理坐标。
+    {
+      int gx = 0, gy = 0;
+      if (WindowGLFW::global_cursor(&gx, &gy)) {
+        in.gx = (float)gx;
+        in.gy = (float)gy;
+      } else {
+        in.gx = (float)xp;
+        in.gy = (float)yp;
+      }
+    }
     // —— 统一窗口拖拽（d39）：全局光标锚定跟随（X11 免疫异步 move），纯 GLFW API ——
     // px/py 取当前光标的锚定坐标系坐标（全局成功=屏幕坐标，否则物理换算），数学同构。
     if (win_move_drag) {
@@ -640,7 +665,7 @@ int main(int argc, char** argv) {
       if (drag_global) {
         if (!WindowGLFW::global_cursor(&px, &py)) { publish_wake(); return; }
       } else {
-        cursor_phys(x, y, &px, &py);
+        cursor_phys(xp, yp, &px, &py);
       }
       window.set_pos(drag_wx0 + px - int(drag_px0), drag_wy0 + py - int(drag_py0));
       publish_wake();
@@ -651,7 +676,7 @@ int main(int argc, char** argv) {
       if (drag_global) {
         if (!WindowGLFW::global_cursor(&px, &py)) { publish_wake(); return; }
       } else {
-        cursor_phys(x, y, &px, &py);
+        cursor_phys(xp, yp, &px, &py);
       }
       const int dx = px - int(drag_px0), dy = py - int(drag_py0);
       int nx = drag_wx0, ny = drag_wy0, nw = drag_ww0, nh = drag_wh0;
@@ -689,7 +714,7 @@ int main(int argc, char** argv) {
     // 边缘带光标暗示（非拖拽、非 pip、窗口态）：贴边/贴角即换 resize 光标
     if (!pip_mode && !window.fullscreen() && !window.maximized())
       window.update_cursor_for_edge(
-          WindowGLFW::hit_window_edge(window.width(), window.height(), in.mx, in.my));
+          WindowGLFW::hit_window_edge(window.logical_width(), window.logical_height(), in.mx, in.my));
     // 面板唤醒防抖（d36）：面板隐藏后光标位移超过阈值才算"有效移动"；
     // 微动只更新光标位置（悬停判定仍工作），面板保持隐藏。
     if (!chrome_awake) {
@@ -730,6 +755,14 @@ int main(int argc, char** argv) {
       return;
     }
     in.down = action == GLFW_PRESS;
+    // d222：按键时刷新全局坐标（拖拽/双击判定基准；无移动也能拿到当前位置）
+    {
+      int gx = 0, gy = 0;
+      if (WindowGLFW::global_cursor(&gx, &gy)) {
+        in.gx = (float)gx;
+        in.gy = (float)gy;
+      }
+    }
     if (pip_mode) {
       if (action == GLFW_PRESS) {
         // 画中画：记录按下，等待"移动/超时 → 拖动"或"原地弹起 → 恢复"
@@ -775,7 +808,7 @@ int main(int argc, char** argv) {
     // 原 WM_NCHITTEST 优先序一致；全屏/最大化不进入 ——
     if (in.down && !window.fullscreen() && !window.maximized()) {
       const WindowGLFW::WinEdge e =
-          WindowGLFW::hit_window_edge(window.width(), window.height(), in.mx, in.my);
+          WindowGLFW::hit_window_edge(window.logical_width(), window.logical_height(), in.mx, in.my);
       if (e != WindowGLFW::WinEdge::None) {
         win_drag_start_resize(e);
         publish_wake();
@@ -944,6 +977,7 @@ int main(int argc, char** argv) {
     render.set_theme(skin_pack[idx].theme);
     render.set_skin_list(skin_ids, skin_names, idx);
     player.set_panscan(theme.layout.stageCover ? 1.0 : 0.0);  // d184：随皮肤更新填充
+    player.set_background_color(stage_bg_rgb(theme.stageBg));  // d196：随皮肤更新留边底色
     cfg.skin = skin_pack[idx].meta.id;
     Config::patch(paths::config_file(), {{"ui", "skin", "\"" + cfg.skin + "\""}});
     FR_LOG_INFO("[SKIN] 切换皮肤 = {}（已落盘）", cfg.skin);
@@ -1510,7 +1544,7 @@ int main(int argc, char** argv) {
     }
     {
       const auto& L = theme.layout;
-      const bool over_bar = in.my >= (float)window.height() - 2.f * L.botBarH;
+      const bool over_bar = in.my >= (float)window.logical_height() - 2.f * L.botBarH;
       const bool busy = in.down || pip_pressed;
       const bool want_hide = window.fullscreen() && mouse_inside &&
                              now - in.last_input >= L.idleHideSec &&

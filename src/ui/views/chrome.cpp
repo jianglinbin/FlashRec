@@ -94,13 +94,17 @@ float center_play_radius(const Theme& t) {
 float chrome_fade(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSnapshot& snap,
                   const ViewInput& in, bool media_enabled) {
   const auto& L = t.layout;
-  const float idle_sec = (float)(in.now - in.last_input);
-  if (idle_sec < L.idleHideSec) return 1.f;
-  // 与底栏任意控件交互（含拖拽）都保持两栏可见，不只是进度条/音量
-  const BarHit hit = bar_hit(vg, t, w, h, snap, in, media_enabled);
-  if (hit.any() || in.drag_progress || in.drag_volume) return 1.f;
-  if (idle_sec < L.idleHideSec + L.fadeSec)
-    return 1.f - (float)((idle_sec - L.idleHideSec) / L.fadeSec);
+  (void)vg; (void)w; (void)snap; (void)media_enabled;
+  const double idle_sec = in.now - in.last_input;
+  // 拖拽进度/音量期间恒显（交互中不该淡出）
+  if (in.drag_progress || in.drag_volume) return 1.f;
+  // d203：鼠标停在操作栏区域 → 用更长的隐藏延迟（用户定 6s）；离开该区域恢复 1.5s。
+  // 取代旧逻辑「悬停任一控件即永久显示」——那样永远不隐藏。
+  const bool over_bar = in.my >= h - L.botBarH;
+  const double hide_after = over_bar ? L.barHoverHideSec : L.idleHideSec;
+  if (idle_sec < hide_after) return 1.f;
+  if (idle_sec < hide_after + L.fadeSec)
+    return 1.f - (float)((idle_sec - hide_after) / L.fadeSec);
   return 0.f;
 }
 
@@ -389,11 +393,7 @@ void draw_bottom_bar(NVGcontext* vg, const Theme& t, float w, float h,
       nvgFillPaint(vg, nvgImagePattern(vg, tl.tx, tl.ty, tl.w, tl.h, 0, thumb_img, 1.0f));
       nvgFill(vg);
     }
-    nvgBeginPath(vg);
-    nvgRoundedRect(vg, tl.tx, tl.ty, tl.w, tl.h, L.thumbRadius);
-    nvgStrokeColor(vg, t.previewBorder);
-    nvgStrokeWidth(vg, 1.f);
-    nvgStroke(vg);
+    // d215：缩略图外描边线已去掉（一律不留描边）
     rounded_rect(vg, tl.bubble_x, tl.ty + L.thumbH + 3, tl.bubble_w, 16, 3, t.previewTimeBg);
     text(vg, t, tl.anchor_px, tl.ty + L.thumbH + 11, L.timeFont, t.previewTimeText,
          format_hms_seconds(p * snap.duration).c_str(), NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);

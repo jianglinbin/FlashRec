@@ -278,6 +278,9 @@ void MpvBridge::load_uri(const std::string& uri, double start_sec) {
   if (!mpv_) return;
   // d184：每次加载应用视频填充（cover=1/contain=0；等价 CSS object-fit）
   mpv_set_property(mpv_, "panscan", MPV_FORMAT_DOUBLE, &panscan_);
+  // d196：留边底色随皮肤（contain 时 letterbox 用 stageBg，而非 mpv 默认黑）
+  if (!bg_color_.empty())
+    mpv_set_property_string(mpv_, "background-color", bg_color_.c_str());
   std::string clean = uri_without_fragment(uri);
   double start = start_sec;
   if (start < 0) start = uri_start_fragment(uri);  // R1：#t=xx 进度载体
@@ -355,6 +358,11 @@ void MpvBridge::set_speed(double s) {
 void MpvBridge::set_panscan(double p) {
   panscan_ = p < 0 ? 0 : (p > 1 ? 1 : p);
   if (mpv_) mpv_set_property(mpv_, "panscan", MPV_FORMAT_DOUBLE, &panscan_);
+}
+
+void MpvBridge::set_background_color(const std::string& rgb_hex) {
+  bg_color_ = rgb_hex;
+  if (mpv_) mpv_set_property_string(mpv_, "background-color", bg_color_.c_str());
 }
 
 double MpvBridge::get_time_pos() {

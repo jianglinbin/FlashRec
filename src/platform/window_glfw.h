@@ -103,10 +103,20 @@ class WindowGLFW {
   void move_to_workarea_corner(int w, int h);            // 工作区（避开任务栏）右下角
 
   // 每帧坐标
-  int width() const;
-  int height() const;
-  // 窗口 DPI 缩放（glfwGetWindowContentScale 的 x 分量；d68 预留 —— 当前 UI
-  // 坐标系为未缩放物理像素，阈值不折算，见 interaction.h 注释）
+  int width() const;    // framebuffer 物理像素（FBO/GL scissor 用）
+  int height() const;   // framebuffer 物理像素
+  // d210：UI 逻辑尺寸（屏幕坐标/DIP，glfwGetWindowSize）。绘制坐标一律用它，
+  // nanovg 再按 pixel_ratio 放大到物理像素 → 高 DPI 下标题栏/字号自动跟随。
+  int logical_width() const;
+  int logical_height() const;
+  // 物理 / 逻辑 比（= 设备像素比）；逻辑尺寸不可用时回落 content_scale()。
+  float pixel_ratio() const;
+  // 光标 → DIP 的换算系数 = logical_width / glfwGetWindowSize().width：
+  //   · Windows：窗口尺寸==framebuffer（物理）⇒ 1/scale（光标是物理像素，要缩到 DIP）；
+  //   · Wayland：窗口尺寸==逻辑（surface）⇒ 1（光标本就是逻辑坐标，不能再缩）；
+  //   · X11：两者相等 ⇒ 1。避免"统一除 pixelRatio"在 Wayland 上把命中坐标减半。
+  float dip_scale() const;
+  // 窗口 DPI 缩放（glfwGetWindowContentScale 的 x 分量）
   float content_scale() const;
 
   // d68：任务栏图标（Win/X11；Wayland 走 app_id 匹配桌面项，见 create 注释）

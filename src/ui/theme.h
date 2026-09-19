@@ -28,6 +28,8 @@ struct Theme {
   NVGcolor winClosePressBg;
   NVGcolor winCloseHoverIcon;
   // 底栏按钮（与顶栏 winXxx 分开：两者尺寸/语义不同，共用 token 会让改一处动两处）
+  NVGcolor btnBg = {0, 0, 0, 0};   // d201 按钮常态底色（透明=不画；现仅 hover/press 有底）
+  NVGcolor btnFg = {0, 0, 0, 0};   // d201 按钮前景（透明=沿用 iconDim→icon 插值 / iconDisabled）
   NVGcolor btnHoverBg;
   NVGcolor btnPressBg;
   // 静音态（音量图标斜线、条与滑块弱化）
@@ -48,6 +50,14 @@ struct Theme {
   NVGcolor previewTimeBg;
   NVGcolor previewTimeText;
   NVGcolor stageBg;            // 无画面时的舞台底色（skins.json stagePlaceholder）
+  NVGcolor stageBorder = {0, 0, 0, 0};  // d193 视频区外描边（内嵌浮卡皮肤用；透明=不画）
+  // d220 舞台（待机/字幕/引导）文字色：透明 = 回落 titleText / subText
+  NVGcolor stageText = {0, 0, 0, 0};
+  NVGcolor stageSubText = {0, 0, 0, 0};
+  // d198 三区块整体描边（透明=不画）：窗口外框 / 标题栏四边 / 操作栏四边
+  NVGcolor winBorder = {0, 0, 0, 0};
+  NVGcolor topBarBorder = {0, 0, 0, 0};
+  NVGcolor botBarBorder = {0, 0, 0, 0};
 
   // —— 形状 token（对齐 skins.json shape.*）——
   struct Shape {
@@ -66,7 +76,7 @@ struct Theme {
     int winW = 960;
     int winH = 540;
     // 顶栏
-    float topBarH = 34;
+    float topBarH = 40;   // d216：基础高度 60 → 40（用户定）
     float topBarPadL = 14;
     // 底栏
     float botBarH = 44;
@@ -137,8 +147,15 @@ struct Theme {
     float titleIconGap = 4, titleTextGap = 12, titleMaxRatio = 0.45f;
     // 视频填充：true = cover（短边填满/居中/裁切，mpv panscan=1）；false = contain
     bool stageCover = true;
+    // d193 视频区内嵌浮卡（paper-min 等浅色皮肤）：>0 时画面收进内缩一圈的圆角卡，
+    // 卡外露 stageBg 底色 + stageBorder 描边；0 = 画面铺满整窗（既有行为）
+    float stageInset = 0;    // 内缩像素
+    float stageRadius = 0;   // 卡片圆角（0 = 跟随窗口圆角）
+    // d198 描边宽度（三区块整体描边共用；0 = 不画）
+    float borderWidth = 1.0f;
     // 动效
-    double idleHideSec = 2.5;   // 无操作隐去（d25：用户定 2.5s）
+    double idleHideSec = 1.5;   // 无操作隐去（d202：用户改为 1.5s，原 2.5s）
+    double barHoverHideSec = 6.0;  // d203：鼠标停在操作栏区域时的隐藏延迟（用户定 6s）
     double fadeSec = 0.3;       // 淡入淡出
     float hoverFadeSec = 0.12f;  // 按钮悬停淡入时长
     float pressFadeSec = 0.07f;  // 按钮按压/回弹时长
@@ -157,7 +174,7 @@ struct Theme {
     float osdVolH = 150;
     float osdBarThick = 4;     // 竖向音量条粗
     float osdBarLen = 70;      // 竖向音量条长（d31：88 会顶到百分比文字，缩短留出间距）
-    float osdSeekH = 56;       // 进度/动作 OSD 面板（横向）高；宽度按内容自适应（d32 删固定宽）
+    float osdSeekH = 40;       // 横向 OSD 基础高度 56 -> 40（d223 用户定）；宽度按内容自适应
     float osdMaxHRatio = 0.2f; // d160：横向面板高占窗口高的上限比 —— 小窗口整体等比收缩
                                //   （含图标/字号/间距），大窗口恒原生高；音量竖面板不参与
     float osdFont = 12;        // OSD 文字字号
@@ -183,7 +200,8 @@ struct Theme {
 
   // —— 皮肤表 ——
   static const Theme& get(const std::string& id);  // 未知 id 回落 fluent
-  static const char* kSkinIds[6];
+  static const char* kSkinIds[1];
+  static constexpr int kSkinCount = 1;  // 内置皮肤数（其余皮肤只在 assets/skins.json）
   // d180：编译期兜底默认（= fluent 工厂）。JSON 加载以它为基底，坏值回退于此。
   static Theme make_default();
 };

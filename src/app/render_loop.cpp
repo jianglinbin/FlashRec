@@ -358,9 +358,15 @@ void RenderLoop::frame(double now) {
   // GL 临界区：macOS 需要与 Cocoa 主线程的 drawable 访问互斥（Win/Linux 空实现）
   FR_GL_GUARD();
 
-  const int w = window_.width();
-  const int h = window_.height();
-  if (w <= 0 || h <= 0) return;
+  // d210：绘制坐标 = **逻辑尺寸**（DIP，glfwGetWindowSize）；FBO/GL 视口/scissor 用
+  // **物理 framebuffer**；nanovg 按 pixel_ratio 把逻辑坐标放大到设备像素 —— 高 DPI
+  // （4K@150/200%）下标题栏/字号/圆角随之等比放大，与 Chrome 同构。
+  const int w = window_.logical_width();
+  const int h = window_.logical_height();
+  const int fb_w = window_.width();
+  const int fb_h = window_.height();
+  const float px_ratio = window_.pixel_ratio();
+  if (w <= 0 || h <= 0 || fb_w <= 0 || fb_h <= 0) return;
 
   // d182：帧首应用主线程交接的皮肤/列表（渲染线程独占 theme_，无锁竞争）
   {
@@ -537,8 +543,9 @@ void RenderLoop::frame(double now) {
   // 防抖与双击窗口的判定错乱（同 d45 右键菜单状态机的前置理由；跳帧路径提前
   // return，不含绘制段）。区域判定用 hover_key 位掩码 + 顶栏纯几何，不依赖
   // bar_hit（其结果只在绘制段可算，且顶栏几何禁两处各算）。
-  // 阈值口径：本应用 UI 坐标 = 未缩放 framebuffer 物理像素（无 DPI 缩放渲染），
-  // 与 GetSystemMetrics 同口径 → scale 恒传 1（接口保留 scale 给未来缩放渲染）。
+  // 阈值口径：UI 坐标 = 逻辑(DIP)（d210）。系统阈值按主线程 DPI 缩放折算会引入
+  // 渲染线程读 GLFW 的线程问题；实测 scale=1 的系统像素阈值在本机（150%）双击/拖动
+  // 判定正常，故保持 1（后续若要精调，改为主线程算好传入，勿在渲染线程调 GLFW）。
   {
     const InteractionThresholds thr = interaction_thresholds(1.f);
     if (pip_mode_ || ctx_open_ || speed_open_ || skin_open_) {
@@ -570,8 +577,8 @@ void RenderLoop::frame(double now) {
                               : (hover_key != 0 ? PtrRegion::Widget : PtrRegion::Stage);
         ptr_state_ = PtrState::Pressed;
         in_dbl_ = false;
-        press_x_ = in.mx;
-        press_y_ = in.my;
+        press_x_ = in.gx;  // d222：按下锚点用**全局屏幕坐标**（不受窗口移动/最大化影响）
+        press_y_ = in.gy;
         // 三段式②：本按下若落在双击窗口内（UP1→DOWN2 ≤ 窗口 且 ≤ dblRect）→
         // 双击在 DOWN2 立即成立（Windows 口径 WM_LBUTTONDBLCLK 在第二击按下发出）。
         // 双击时长分区域：视频空白 150ms 用户定值，其余读系统 GetDoubleClickTime；
@@ -585,9 +592,9 @@ void RenderLoop::frame(double now) {
                          ? thr.stage_dbl_pending_sec
                          : thr.stage_dbl_time_sec)
                   : thr.dbl_time_sec;
-          if (now - up1_at_ <= win_sec &&
-              std::fabs(in.mx - up1_x_) <= thr.dbl_rect_px &&
-              std::fabs(in.my - up1_y_) <= thr.dbl_rect_px) {
+          const double dt = now - up1_at_;
+          const double dx = std::fabs(in.gx - up1_x_), dy = std::fabs(in.gy - up1_y_);
+          if (dt <= win_sec && dx <= thr.dbl_rect_px && dy <= thr.dbl_rect_px) {
             in_dbl_ = true;
             up1_at_ = 0;  // 三击不连判：双击成立后下一轮从头计（测试矩阵 §9）
             pend_single_ = false;  // 双击成立 = 取消挂起单击（否则全屏夹带暂停）
@@ -600,9 +607,11 @@ void RenderLoop::frame(double now) {
       } else if (ptr_state_ != PtrState::Idle) {
         // PRESSED 推进：|Δ|>kDragPx 一次性转 DRAGGED（防抖，§2）。
         // 拖动指令恒产生、消费与否由主线程按区域决定（需求 #3「指令必须被识别」）。
+        // d222：Δ 用**全局屏幕坐标**（in.gx/gy）——双击时全局位置不变、拖动才变，
+        // 且不受窗口几何跳变（最大化/还原/全屏改客户区尺寸）影响。故无需再特判几何跳变。
         if (ptr_state_ == PtrState::Pressed &&
-            (std::fabs(in.mx - press_x_) > thr.drag_px ||
-             std::fabs(in.my - press_y_) > thr.drag_px)) {
+            (std::fabs(in.gx - press_x_) > thr.drag_px ||
+             std::fabs(in.gy - press_y_) > thr.drag_px)) {
           ptr_state_ = PtrState::Dragged;
           const UiIntent::DragRegion rg = ptr_region_ == PtrRegion::TopBar
                                               ? UiIntent::DragRegion::TopBar
@@ -632,8 +641,8 @@ void RenderLoop::frame(double now) {
             }
             // 三段式②记账（Widget 区不记：按钮无双击语义，§4 Windows 惯例）
             up1_at_ = now;
-            up1_x_ = in.mx;
-            up1_y_ = in.my;
+            up1_x_ = in.gx;  // d222：全局坐标
+            up1_y_ = in.gy;
           }
           ptr_state_ = PtrState::Idle;
           in_dbl_ = false;
@@ -772,8 +781,11 @@ void RenderLoop::frame(double now) {
     dmg_reasons |= 1u << 5;
   }
   // —— 持续：面板淡入淡出窗口（底栏带 + 迷你线带；顶栏常显/中央键常显不参与）——
-  if (!pip_mode_ && has_picture &&
-      now - in.last_input < Lay.idleHideSec + Lay.fadeSec + 0.15) {
+  // d202：待机态（无画面）同样要淡出 → 去掉 has_picture 限制。
+  // d203：鼠标在操作栏区域时隐藏延迟更长 → 窗口按对应阈值取。
+  const double hide_after =
+      (in.my >= (float)h - Lay.botBarH) ? Lay.barHoverHideSec : Lay.idleHideSec;
+  if (!pip_mode_ && now - in.last_input < hide_after + Lay.fadeSec + 0.15) {
     dmg_add(R.bottom_bar);
     dmg_add(R.mini_line);
     dmg_reasons |= 1u << 6;
@@ -946,7 +958,18 @@ void RenderLoop::frame(double now) {
   //（d60 注释：分配走驱动内存池），视频 FBO 同价；大头是 mpv 全管线，已限到 30fps。
   const bool live_resize = window_.interactive_resize();
   static constexpr double kLiveResizeVideoSec = 1.0 / 30.0;  // d161：拖拽中视频降帧间隔
-  const bool size_changed = w != fbo_.width() || h != fbo_.height();
+
+  // d214：**视频 stage 区域** —— 标题栏（顶栏）可见时**不计入**渲染区，视频从其下缘开始；
+  // 标题栏隐藏（全屏 / 画中画）时才允许占满整窗。规则由用户定：标题栏常显为窗口模式，
+  // 但它是 chrome、不属于"画面应该覆盖"的区域；操作栏是自动隐藏的悬浮层，不抠。
+  // FBO 按 stage 的**物理**尺寸分配（高 DPI 下保持清晰），mpv 依此比例做 cover/contain。
+  const bool topbar_shown = !in.fullscreen && !pip_mode_;
+  const float stage_top = topbar_shown ? theme_.layout.topBarH : 0.f;
+  const int stage_h = (int)std::lround((float)h - stage_top);
+  const int stage_fb_w = (int)std::lround((float)fb_w);
+  const int stage_fb_h = (int)std::lround((float)(h - stage_top) * px_ratio);
+  if (stage_h <= 0 || stage_fb_h <= 0) return;
+  const bool size_changed = stage_fb_w != fbo_.width() || stage_fb_h != fbo_.height();
 
   // —— ① 视频路径：mpv → FBO（仅画面就绪时）——
   bool have_src = false;
@@ -964,11 +987,11 @@ void RenderLoop::frame(double now) {
     // d161：live_resize 中 FBO 重建与 mpv 重渲共用 30fps 时钟 —— 未到点不重建
     //（新纹理内容为空，重建即黑帧），旧容量 FBO 内容仍有效，合成端拉伸显示；
     if (size_changed && (!live_resize || now - last_live_video_ >= kLiveResizeVideoSec)) {
-      if (!fbo_.ensure(w, h)) return;
+      if (!fbo_.ensure(stage_fb_w, stage_fb_h)) return;
       fbo_fresh = true;
     } else if (fbo_.fbo() == 0) {
       // 拖动中首次也要保证有可用 FBO（否则没内容可拉伸）
-      if (!fbo_.ensure(w, h)) return;
+      if (!fbo_.ensure(stage_fb_w, stage_fb_h)) return;
       fbo_fresh = true;
     }
     const bool video_due = !live_resize || now - last_live_video_ >= kLiveResizeVideoSec;
@@ -1067,10 +1090,10 @@ void RenderLoop::frame(double now) {
   // 驱动 flip 轮转下残留可能是旧帧 → 实测偶发闪烁）。帧末整体 blit 到默认帧
   // 缓冲再 swap（见帧末提交段）。ensure 无条件调用：live_resize 中也随窗口精确
   // 重建（该帧必为 full，全画覆盖新容量；分配走驱动内存池，代价可忽略）。
-  if (!app_fbo_.ensure(w, h)) return;
+  if (!app_fbo_.ensure(fb_w, fb_h)) return;
   glBindFramebuffer(GL_FRAMEBUFFER, app_fbo_.fbo());
-  glViewport(0, 0, w, h);
-  begin_frame(nvg_.ctx(), w, h);
+  glViewport(0, 0, fb_w, fb_h);
+  begin_frame(nvg_.ctx(), w, h, px_ratio);
   DmgRect clip_r{};
   const DmgRect* clip = nullptr;
   if (dmg.full()) {
@@ -1079,7 +1102,7 @@ void RenderLoop::frame(double now) {
   } else {
     clip_r = damage_bbox(dmg);
     clip = &clip_r;
-    dmg_scissor_begin(nvg_.ctx(), h, clip_r);
+    dmg_scissor_begin(nvg_.ctx(), clip_r, fb_h, px_ratio, px_ratio);
     glClearColor(0, 0, 0, 0);
     glClear(GL_COLOR_BUFFER_BIT);  // GL scissor 内 = 只清脏区
   }
@@ -1320,14 +1343,44 @@ void RenderLoop::frame(double now) {
     nvgFillColor(nvg_.ctx(), theme_.stageBg);
     nvgFill(nvg_.ctx());
 
-    nvgBeginPath(nvg_.ctx());  // 画面本体：source-over 叠在底色上，未覆盖处仍是 alpha=0 → 透出底色
-    if (frame_rad > 0.5f)
-      nvgRoundedRect(nvg_.ctx(), 0, 0, (float)w, (float)h, frame_rad);
+    // d193：纸白等皮肤的视频区是"内嵌浮卡"——画面收进内缩一圈的圆角卡（stageInset），
+    // 卡外露 stageBg 底色 + stageBorder 描边；inset=0 时行为与旧版一致（画面铺满整窗）。
+    // d209：视频区**不再做四边内缩**。`stageInset`（内嵌浮卡）会在四个方向都留出舞台底色，
+    // 违反"至少两个方向满屏"的硬性要求（用户实测全屏时四边皆不满）。这里强制 inset=0：
+    //   · cover ⇒ 四边满；contain ⇒ letterbox 只占一条轴，另一条轴满 —— 恒 ≥2 边满。
+    // 留边底色仍由 mpv `background-color`（= 皮肤 stageBg，d197）负责，视觉上仍是"电影条"。
+    const float inset = 0.0f;
+    (void)theme_.layout.stageInset;  // 保留 token（未来若做"按轴内缩"再启用）
+    const bool inset_stage = inset > 0.5f;
+    const float vx = inset_stage ? inset : 0.0f;
+    const float vy = inset_stage ? inset : stage_top;  // d214：跳过标题栏区域
+    const float vw = (float)w - 2.0f * vx;
+    const float vh = (float)stage_h - 2.0f * (vy - stage_top);
+    const float vrad = inset_stage ? (theme_.layout.stageRadius > 0.5f
+                                          ? theme_.layout.stageRadius
+                                          : frame_rad)
+                                   : frame_rad;
+
+    nvgBeginPath(nvg_.ctx());
+    // 标题栏可见时，视频顶边是直线（与顶栏相接），只圆下面两角；隐藏时才四角全圆。
+    if (vrad > 0.5f)
+      nvgRoundedRectVarying(nvg_.ctx(), vx, vy, vw, vh, topbar_shown ? 0.f : vrad, topbar_shown ? 0.f : vrad,
+                            vrad, vrad);
     else
-      nvgRect(nvg_.ctx(), 0, 0, (float)w, (float)h);
-    nvgFillPaint(nvg_.ctx(), nvgImagePattern(nvg_.ctx(), 0, 0.0f, (float)pic_w_,
-                                             (float)pic_h_, 0, pic_img_, 1.0f));
+      nvgRect(nvg_.ctx(), vx, vy, vw, vh);
+    nvgFillPaint(nvg_.ctx(), nvgImagePattern(nvg_.ctx(), vx, vy, vw, vh, 0, pic_img_, 1.0f));
     nvgFill(nvg_.ctx());
+
+    if (inset_stage && theme_.stageBorder.a > 0.003f && theme_.layout.borderWidth > 0.01f) {
+      nvgBeginPath(nvg_.ctx());
+      if (vrad > 0.5f)
+        nvgRoundedRect(nvg_.ctx(), vx, vy, vw, vh, vrad);
+      else
+        nvgRect(nvg_.ctx(), vx, vy, vw, vh);
+      nvgStrokeColor(nvg_.ctx(), theme_.stageBorder);
+      nvgStrokeWidth(nvg_.ctx(), theme_.layout.borderWidth);  // d198：宽度统一走 token
+      nvgStroke(nvg_.ctx());
+    }
   }
 
   // —— UI 叠加 ——
@@ -1648,7 +1701,14 @@ void RenderLoop::frame(double now) {
   // d61：描边从合成缓冲挪到**提交之后**（见帧末）—— 描边若画进 app_fbo_ 会
   // 永久残留（合成缓冲内容自持，没人清它），表现为历史框线越积越多。
   const bool dbg_dmg = dbg_lvl_ >= 1;
+
+  // d215：三区块整体描边（窗口外框 / 标题栏四边 / 操作栏四边）已**移除**（用户定：
+  // 一律去掉描边线，仅保留「标题栏下框线 + 操作面板上边框线」这两条 —— 它们由 `bar()`
+  // 用 barBorderBottomBar / barBorderTopBar 绘制，不在此处）。winBorder/topBarBorder/
+  // botBarBorder/borderWidth token 暂留（不再参与渲染），便于日后按需恢复。
+
   if (clip != nullptr) dmg_scissor_end(nvg_.ctx());
+
   if (dbg_dmg) {
     if (dmg.full())
       FR_LOG_INFO("[DMG] FULL {}x{}", w, h);
@@ -1666,15 +1726,15 @@ void RenderLoop::frame(double now) {
   // NEAREST：同尺寸 blit 无缩放采样问题；格式 GL_RGBA8 与默认帧缓冲一致。
   glBindFramebuffer(GL_READ_FRAMEBUFFER, app_fbo_.fbo());
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-  glBlitFramebuffer(0, 0, app_fbo_.width(), app_fbo_.height(), 0, 0, w, h,
+  glBlitFramebuffer(0, 0, app_fbo_.width(), app_fbo_.height(), 0, 0, fb_w, fb_h,
                     GL_COLOR_BUFFER_BIT, GL_NEAREST);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
   // —— d61 诊断描边：画在默认帧缓冲上（blit 之后、swap 之前）——
   // 只随本帧上屏、不写进合成缓冲 → 零残留。仅诊断模式多一次 begin/end_frame。
   if (dbg_dmg && clip != nullptr) {
-    glViewport(0, 0, w, h);
-    begin_frame(nvg_.ctx(), w, h);
+    glViewport(0, 0, fb_w, fb_h);
+    begin_frame(nvg_.ctx(), w, h, px_ratio);
     nvgBeginPath(nvg_.ctx());
     nvgRect(nvg_.ctx(), (float)clip_r.x + 0.5f, (float)clip_r.y + 0.5f,
             (float)clip_r.w - 1.f, (float)clip_r.h - 1.f);

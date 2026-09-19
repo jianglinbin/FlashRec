@@ -1,0 +1,9 @@
+// d193：Windows 程序图标资源（编进 flashrec.exe 内嵌图标）。
+//
+// 为什么需要它：Inno Setup 的 [Icons] 未显式指定 IconFilename 时取**目标 exe 的图标**；
+// 免安装便携版的文件夹/文件图标、任务栏、Alt-Tab 也都取 exe 内嵌图标。
+// 之前 exe 没有图标资源（只有运行期 glfwSetWindowIcon 设的窗口图标）⇒ 安装后桌面/开始
+// 菜单快捷方式显示成"通用文档"图标（实测用户截图）。
+//
+// ico 是随包资源（assets/icons/app.ico，由 tools/make_icon.py 生成）；路径相对本 .rc 解析。
+IDI_APP ICON "../../assets/icons/app.ico"

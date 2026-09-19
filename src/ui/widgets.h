@@ -12,17 +12,18 @@ namespace fr {
 struct Theme;
 
 // —— 帧封装 ——
-void begin_frame(NVGcontext* vg, int w, int h);
+// w/h = 逻辑尺寸（DIP），pixel_ratio = 物理/逻辑比：nanovg 内部按它放大到设备像素。
+void begin_frame(NVGcontext* vg, int w, int h, float pixel_ratio);
 void end_frame(NVGcontext* vg);
 
 // —— 区域重绘：脏区裁剪通道（v0.4.0 d56；归因 P1 起，通道先就位）——
 // clip=nullptr 表示"全量绘制"，恒命中。带级早退只准用在**纯绘制**段
 //（无 button_hit/回调），含交互语义的段禁止早退 —— 交互必须每帧全跑。
 bool dmg_hit(const DmgRect* clip, float x, float y, float w, float h);
-// 开启 GL scissor（物理像素，y 翻转经 gl_scissor_y 统一换算）+ nanovg scissor
-//（逻辑坐标）。nanovg 全程不调 glScissor（已核），二者无状态冲突。
-// 必须与 dmg_scissor_end 成对调用。
-void dmg_scissor_begin(NVGcontext* vg, int win_h, const DmgRect& r);
+// 开启 GL scissor（**物理像素**：r 为逻辑坐标，按 sx/sy 放大后经 gl_scissor_y 翻转）
+// + nanovg scissor（**逻辑坐标**，nanovg 自行按 pixelRatio 放大）。必须与 dmg_scissor_end 成对调用。
+// fb_h = framebuffer 物理高度（GL y 翻转基准）。
+void dmg_scissor_begin(NVGcontext* vg, const DmgRect& r, int fb_h, float sx, float sy);
 void dmg_scissor_end(NVGcontext* vg);
 
 // —— 基元 ——

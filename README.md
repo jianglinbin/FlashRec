@@ -1,8 +1,32 @@
 # FlashRec
 
+[![build-packages](https://github.com/jianglinbin/FlashRec/actions/workflows/release.yml/badge.svg)](https://github.com/jianglinbin/FlashRec/actions/workflows/release.yml)
+
 DLNA / UPnP 投屏接收端（DMR）—— 把手机上的视频投到电脑屏幕上播放。
 
 C++20 + 自绘 UI（nanovg / GLFW），Windows 与 Linux 一等公民。
+
+## 界面预览
+
+播放态界面（无边框 + 上下贴边半透明栏 + 不操作自动隐去 + 悬停时间线出缩略图），7 套内置皮肤只替换颜色与圆角 token，布局完全一致：
+
+|  |  |
+|:---:|:---:|
+| ![北境·雪](docs/img/skins/nord-snow.png)<br>**北境·雪** · 白底靛蓝，清爽圆角 | ![北境·冰](docs/img/skins/nord-frost.png)<br>**北境·冰** · 冰蓝直角，冷冽 |
+| ![北境·霞](docs/img/skins/nord-rose.png)<br>**北境·霞** · 粉底玫红，柔和 | ![北境·紫](docs/img/skins/nord-iris.png)<br>**北境·紫** · 紫底罗兰，大圆角 |
+| ![北境·夜](docs/img/skins/nord-night.png)<br>**北境·夜** · 极夜深灰 + 冰蓝 | ![北境·林](docs/img/skins/nord-forest.png)<br>**北境·林** · 绿底林绿，小圆角 |
+| ![暗灰橙](docs/img/skins/ubuntu-orange.png)<br>**暗灰橙** · GNOME 深灰 + Ubuntu 橙（默认） | 把自定义皮肤 JSON 放进用户皮肤目录 `skins/`，托盘「重载皮肤」即可热加载 |
+
+## 下载
+
+到 [Releases](https://github.com/jianglinbin/FlashRec/releases) 下载对应平台的安装包（每次发布四件齐全 + `SHA256SUMS.txt`）：
+
+| 平台 | 文件 | 说明 |
+|---|---|---|
+| Windows | `FlashRec-<ver>-win64.zip` | 便携版，解压即用 |
+| Windows | `FlashRec-<ver>-win64-setup.exe` | 安装版（Inno Setup，免管理员） |
+| Debian / Ubuntu | `flashrec_<ver>_amd64.deb` | deb 包 |
+| Linux 通用 | `FlashRec-<ver>-x86_64.AppImage` | 全捆绑，直接运行 |
 
 ## 特性
 
@@ -13,6 +37,9 @@ C++20 + 自绘 UI（nanovg / GLFW），Windows 与 Linux 一等公民。
   「投屏成功但连不上」。
 - **自绘 UI**：不依赖系统控件，各平台 / DPI 表现一致；常驻托盘，关窗即最小化到托盘
   （设备保持在线），真正退出走托盘菜单。
+- **皮肤系统**：界面全部 token 化，由 JSON 皮肤驱动（`assets/skins.json`）；内置 7 套
+  皮肤，`settings.json` 的 `ui.skin` 选择；用户皮肤目录放自定义 JSON，托盘「重载皮肤」
+  热加载，改色无需重启。
 - **播放**：libmpv 后端，硬解优先；老显卡 / 驱动的 GL 渲染链不可用时自动降级到软件渲染。
 - **投屏呈现**：多屏可选、按屏记忆、自动全屏。
 - **倍速播放**：控制栏 0.5x–3.0x 七档选择（点击弹出列表），记住上次档位。
@@ -54,10 +81,17 @@ bash tools/package_linux.sh              # → dist/flashrec_<ver>_amd64.deb
 两条脚本都支持 `--only`（`zip|exe` / `deb|appimage`）、`--skip-build`、`--clean`、`--smoke`。
 Linux 那条**必须在 Linux 上跑**（依赖推导与 AppImage 工具都是 Linux 专属）。
 
+也可以不本地打包：推送 `v*` tag 后由 [GitHub Actions](.github/workflows/release.yml)
+自动构建双平台四件并挂到 Release（`workflow_dispatch` 可手动触发只出 artifact）。
+
 ## 用法
 
 启动后程序常驻托盘。手机与电脑处于同一局域网，用任意支持 DLNA 的 App 投屏到
 「FlashRec」即可。关闭窗口 = 最小化到托盘（设备仍在线）；退出请用托盘菜单。
+
+换肤：编辑 `settings.json` 把 `ui.skin` 改成内置皮肤 id（`nord-snow` / `nord-frost` /
+`nord-rose` / `nord-iris` / `nord-night` / `nord-forest` / `ubuntu-orange`），或在用户
+皮肤目录放入自己的 JSON 后点托盘「重载皮肤」。
 
 ## 目录结构
 
@@ -69,13 +103,15 @@ Linux 那条**必须在 Linux 上跑**（依赖推导与 AppImage 工具都是 L
 | `src/ui/` | nanovg 绘制、主题、视图与控件 |
 | `src/platform/` | 窗口、托盘、防息屏、路径、网络接口枚举 |
 | `cmake/` | 构建模块（依赖清单、平台开关、打包） |
-| `assets/` | 随包资源：字体、图标、SCPD XML、默认配置 |
+| `assets/` | 随包资源：字体、图标、SCPD XML、默认配置、皮肤包 |
+| `design/` | 皮肤设计真值（`skins.json` + 预览页） |
+| `docs/` | README 配图（界面预览） |
 | `tools/` | 构建 / 打包 / 自检脚本 |
 | `tests/` | 协议验收与自检脚本 |
 
 架构上的几条硬约束（对改动很关键）：`ui` / `dmr` / `player` 三者互不直接调用，只通过
 事件总线通信；平台宏只准出现在 `src/platform/`；播放状态机的唯一真值在
-`src/player/player_controller`。
+`src/player/player_controller`；视觉 token 只写在 `Theme` 结构体，绘制代码零字面量色值。
 
 ## 说明
 

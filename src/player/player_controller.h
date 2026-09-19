@@ -51,6 +51,8 @@ class PlayerController {
   void report_gl_crash();
   // d184：视频填充（cover=1 / contain=0）
   void set_panscan(double p);
+  // d196：留边底色（letterbox）= 皮肤 stageBg，避免 contain 恒黑边
+  void set_background_color(const std::string& rgb_hex);
   // d151：后端降级后按位重载续播（主线程 tick 内调用；切换本身由渲染线程做）。
   // 返回 true = 本次真的重载了当前文件。
   bool reload_after_backend_switch();

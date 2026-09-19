@@ -15,7 +15,11 @@ struct Theme;
 struct PlaybackSnapshot;
 
 struct ViewInput {
-  float mx = 0, my = 0;          // 鼠标（窗口坐标，原点左上）
+  float mx = 0, my = 0;          // 鼠标（客户区坐标，原点左上）
+  // d222：全局屏幕坐标（物理像素）。拖拽/双击判定专用 —— 双击时全局位置不变、拖动会变，
+  // 且**不受窗口几何跳变影响**（最大化/还原会让客户区坐标整体位移，但全局坐标不动）。
+  // 主线程在鼠标移动/按键时刷新；Wayland 无全局坐标时回落为客户区物理坐标。
+  float gx = 0, gy = 0;
   double now = 0;                // 当前时刻（秒，主循环 steady_clock）
   double last_input = 0;         // 最近输入时刻（idle 隐去基准）
   float dt = 0;                  // 帧间隔（秒）——按钮 hover/press 动画步长

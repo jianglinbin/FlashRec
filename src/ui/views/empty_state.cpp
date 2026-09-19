@@ -35,14 +35,20 @@ void draw_empty_state(NVGcontext* vg, const Theme& t, float w, float h,
   }
 
   // —— 中央：设备名 + 引导文案 ——
-  text(vg, t, w * 0.5f, h * 0.5f - 14, 20, t.titleText,
+  // d220：舞台文字用皮肤可配 token `stageText`/`stageSubText`（未设则回落 titleText/subText），
+  // 不写死颜色 —— 舞台底色每个皮肤不同，文字色必须由皮肤配置决定。
+  const NVGcolor stage_t = t.stageText.a > 0.003f ? t.stageText : t.titleText;
+  const NVGcolor stage_s = t.stageSubText.a > 0.003f ? t.stageSubText : t.subText;
+  text(vg, t, w * 0.5f, h * 0.5f - 14, 20, stage_t,
        friendly_name && *friendly_name ? friendly_name : "FlashRec",
        NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
-  text(vg, t, w * 0.5f, h * 0.5f + 12, 12, t.subText, "等待投屏 · 在播放器的投屏设备中选择本机",
+  text(vg, t, w * 0.5f, h * 0.5f + 12, 12, stage_s, "等待投屏 · 在播放器的投屏设备中选择本机",
        NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
 
-  // —— 底栏：与播放态同一份实现；媒体类控件随会话可用性，窗口类控件恒可用；待机态不淡出 ——
-  draw_bottom_bar(vg, t, w, h, snap, in, cb, snap.has_session, 1.f, false, rad, 0, clip);
+  // —— 底栏：与播放态同一份实现；媒体类控件随会话可用性，窗口类控件恒可用 ——
+  // d202：待机态**也**按 idle 淡出（此前写死 fade=1 恒显，导致"操作栏不隐藏"）。
+  const float fade = chrome_fade(vg, t, w, h, snap, in, snap.has_session);
+  draw_bottom_bar(vg, t, w, h, snap, in, cb, snap.has_session, fade, false, rad, 0, clip);
 
   // —— OSD 反馈浮层（待机态音量键/滚轮同样有反馈）——
   draw_osd(vg, t, w, h, snap, in, clip);
@@ -58,11 +64,13 @@ void draw_standby_mini(NVGcontext* vg, const Theme& t, float w, float h,
 
   const char* name = friendly_name && *friendly_name ? friendly_name : "FlashRec";
   const float cx = w * 0.5f, cy = h * 0.5f;
+  const NVGcolor stage_t = t.stageText.a > 0.003f ? t.stageText : t.titleText;
+  const NVGcolor stage_s = t.stageSubText.a > 0.003f ? t.stageSubText : t.subText;
   if (text_width(vg, 15, name) <= w - 24)
-    text(vg, t, cx, cy - 11, 15, t.titleText, name, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+    text(vg, t, cx, cy - 11, 15, stage_t, name, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
   else
-    text_truncated(vg, t, 12, cy - 11, 15, t.titleText, name, w - 24);
-  text(vg, t, cx, cy + 11, 11, t.subText, "等待投屏", NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+    text_truncated(vg, t, 12, cy - 11, 15, stage_t, name, w - 24);
+  text(vg, t, cx, cy + 11, 11, stage_s, "等待投屏", NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
 }
 
 }  // namespace fr
