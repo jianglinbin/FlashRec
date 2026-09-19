@@ -1,6 +1,7 @@
 #include "app/str_util.h"
 
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

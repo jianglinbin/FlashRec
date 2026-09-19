@@ -305,8 +305,13 @@ build_exe() {
   # 有中文语言包就编进来（/DFR_ZH 打开 installer_windows.iss 里的中文段），没有就英文
   local zh_flag=()
   if [ -f "$ZH_LANG" ]; then zh_flag=(/DFR_ZH); fi
-  # ISCC 是原生 Windows 程序：脚本路径给 -w（反斜杠）形态
-  "$ISCC" "${zh_flag[@]}" "$(cygpath -w "$iss")" || die "ISCC 编译失败（上面是它的原话）"
+  # ISCC 是原生 Windows 程序：脚本路径给 -w（反斜杠）形态。
+  # ⚠️ 必须关掉 MSYS 的**参数路径转换**：否则以 `/` 开头的 `/DFR_ZH` 会被改写成
+  # `C:/Program Files/Git/DFR_ZH`，ISCC 把它当成**第二个脚本名** → 报
+  # "You may not specify more than one script filename"（本机实测踩过）。
+  # 脚本路径本身已是 Windows 反斜杠绝对路径，无需转换，故整条命令关掉转换最稳。
+  MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 \
+    "$ISCC" "${zh_flag[@]}" "$(cygpath -w "$iss")" || die "ISCC 编译失败（上面是它的原话）"
   [ -f "$exe" ] || die "ISCC 没产出 $exe"
   log "→ $exe（$(du -h "$exe" | cut -f1)）"
 }

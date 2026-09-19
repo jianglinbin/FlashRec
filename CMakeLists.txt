@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 # 版本号是打包的唯一来源（deb 文件名 / CPack 元数据 / .desktop）；改版本先改这里，
 # 且必须与 ledger/INDEX.md 中状态为「进行中」的版本一致。
-project(FlashRec VERSION 0.5.0 LANGUAGES C CXX)
+project(FlashRec VERSION 0.5.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

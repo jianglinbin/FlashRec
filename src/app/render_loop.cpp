@@ -1071,10 +1071,6 @@ void RenderLoop::frame(double now) {
   // 单/双击消歧（单击=播放/暂停、双击=全屏），不能被纯几何命中挡掉。
   const bool on_center = snap.state == TransportState::PausedPlayback &&
                          center_play_hit(theme_, (float)w, (float)h, vin.mx, vin.my);
-  // d45：菜单开着时压住空白处单双击语义（点菜单外的空白=只关菜单，不触发播放/暂停）
-  const bool in_stage =
-      !ctx_open_ && !speed_open_ && !on_winbtn && !on_center && !bh.consumed;
-
   // —— d45：右键菜单条目表 + 布局（每帧重算；命中与绘制共用同一份几何）——
   CtxMenuItem ctx_items[16];
   int ctx_n = 0;
