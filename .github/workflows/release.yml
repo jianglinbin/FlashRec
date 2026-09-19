@@ -32,18 +32,20 @@ jobs:
           VS=$(cygpath -m "$VS")
           MSVC=$(ls -1d "$VS"/VC/Tools/MSVC/* | sort -V | tail -1)
           SDKROOT="C:/Program Files (x86)/Windows Kits/10"
-          SDKVER=$(ls -1d "$SDKROOT"/Include/10.* | sort -V | tail -1 | xargs -n1 basename)
+          # ⚠️ 不能用 `xargs basename`：路径含空格会被切成多词，写 GITHUB_ENV 会变裸行导致
+          # "Invalid format 'Files'"（首次 CI 实测踩过）。用 basename "$var" 处理含空格路径。
+          SDKVER=$(basename "$(ls -1d "$SDKROOT"/Include/10.* | sort -V | tail -1)")
           {
-            echo "FR_MSVC=$MSVC"
-            echo "FR_SDK=$SDKROOT"
-            echo "FR_SDKVER=$SDKVER"
-            echo "FR_BT=$VS/Common7/IDE/CommonExtensions/Microsoft/CMake"
-            echo "FR_CMAKE=$VS/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"
-            echo "FR_NINJA=$VS/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe"
-            echo "FR_RC=$SDKROOT/bin/$SDKVER/x64/rc.exe"
-            echo "FR_MT=$SDKROOT/bin/$SDKVER/x64/mt.exe"
+            printf 'FR_MSVC=%s\n' "$MSVC"
+            printf 'FR_SDK=%s\n' "$SDKROOT"
+            printf 'FR_SDKVER=%s\n' "$SDKVER"
+            printf 'FR_BT=%s\n' "$VS/Common7/IDE/CommonExtensions/Microsoft/CMake"
+            printf 'FR_CMAKE=%s\n' "$VS/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"
+            printf 'FR_NINJA=%s\n' "$VS/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe"
+            printf 'FR_RC=%s\n' "$SDKROOT/bin/$SDKVER/x64/rc.exe"
+            printf 'FR_MT=%s\n' "$SDKROOT/bin/$SDKVER/x64/mt.exe"
           } >> "$GITHUB_ENV"
-          echo "MSVC=$MSVC" >> "$GITHUB_ENV"
+          echo "VS=$VS MSVC=$MSVC SDK=$SDKVER"
 
       - name: Fetch third-party deps
         shell: bash
