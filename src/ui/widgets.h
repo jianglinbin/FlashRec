@@ -129,6 +129,7 @@ void icon_volume_muted(NVGcontext* vg, float cx, float cy, float w, NVGcolor c,
                        NVGcolor slash);
 void icon_pip(NVGcontext* vg, float cx, float cy, float w, NVGcolor c);
 void icon_fullscreen(NVGcontext* vg, float cx, float cy, float w, NVGcolor c);
+void icon_skin(NVGcontext* vg, float cx, float cy, float w, NVGcolor c);  // d182 皮肤按钮（调色盘）
 // Windows 三键（右上角方形热区；hover / press 底色 + 图标随按压轻微缩小）
 enum class WinBtn { Min, Max, Close };
 void win_button(NVGcontext* vg, const Theme& t, float x, float y, float w, float h, WinBtn kind,

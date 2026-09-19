@@ -112,6 +112,8 @@ class MpvBridge {
   void set_volume(int vol);  // 0-100
   void set_mute(bool m);
   void set_speed(double s);  // d169：倍速（mpv speed 属性；1.0 = 原速）
+  // d184：视频填充 —— cover=1（短边填满/居中/裁切，不变型无空白）/ contain=0（留黑边）
+  void set_panscan(double p);
 
   // —— 查询（主线程）——
   double get_time_pos();
@@ -146,6 +148,8 @@ class MpvBridge {
   // last_uri_ 主线程写（load_uri 记录，已去 fragment），重载时复用。
   std::atomic<bool> needs_reload_{false};
   std::string last_uri_;
+  // d184：视频填充（panscan）= cover|contain 映射；load 时应用。
+  double panscan_ = 1.0;
 };
 
 }  // namespace fr

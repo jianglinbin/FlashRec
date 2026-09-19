@@ -37,14 +37,14 @@ void draw_player_view(NVGcontext* vg, const Theme& t, float w, float h,
   if (!in.fullscreen) {
     if (dmg_hit(clip, 0.f, 0.f, w, L.topBarH)) {
       bar(vg, t, 0, 0, w, L.topBarH, true, rad, &t.topBarBg);
-      icon_play(vg, L.topBarPadL + 4, L.topBarH * 0.5f, 9, t.icon);
-      text_truncated(vg, t, L.topBarPadL + 12, L.topBarH * 0.5f, L.titleFont, t.titleText,
-                     snap.title.c_str(), w * 0.45f);
+      icon_play(vg, L.topBarPadL + L.titleIconGap, L.topBarH * 0.5f, 9, t.icon);
+      text_truncated(vg, t, L.topBarPadL + L.titleTextGap, L.topBarH * 0.5f, L.titleFont,
+                     t.titleText, snap.title.c_str(), w * L.titleMaxRatio);
       // 徽章列（d124 起可含多枚）：来源徽章 + 软件渲染兜底提示。
       // 左起位置 = 标题截断后的实际宽度 + 间距；空间不足则**逐个省略**（不挤压按钮区）。
-      float bx = L.topBarPadL + 12 +
-                 std::min(w * 0.45f, text_width(vg, L.titleFont, snap.title.c_str())) + 4 +
-                 L.badgeMarginL;
+      float bx = L.topBarPadL + L.titleTextGap +
+                 std::min(w * L.titleMaxRatio, text_width(vg, L.titleFont, snap.title.c_str())) +
+                 L.titleIconGap + L.badgeMarginL;
       const float bx_limit = w - 3 * L.winBtnW - 6;
       auto badge = [&](const char* s) {
         const float bw = text_width(vg, L.badgeFont, s) + L.badgePadX * 2;
@@ -61,6 +61,7 @@ void draw_player_view(NVGcontext* vg, const Theme& t, float w, float h,
       if (in.sw_video) badge("软件渲染");
     }
     draw_win_buttons(vg, t, w, in, cb, clip);
+    draw_skin_button(vg, t, w, in, cb, clip);  // d182：顶栏皮肤按钮
   }
 
   // —— 底栏 + 悬停缩略图浮层（与待机态共用一份实现；缩略图仅播放态有）——

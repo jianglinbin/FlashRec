@@ -118,6 +118,25 @@ struct Theme {
     float speedW = 40;        // 倍速按钮宽（pill；高用 btnBoxW）
     float speedItemH = 24;    // 弹出列表条目高
     float speedMenuPadY = 5;  // 弹出列表上下内边距
+    // —— d182 皮肤引擎：新增区域 token（M2 皮肤按钮 / M3 去字面量）——
+    bool btnCircle = false;   // 底栏控制按钮：圆/方（形状可配）
+    float skinBtnSize = 28;   // 顶栏「皮肤按钮」边长（三键左侧）
+    float skinBtnGap = 6;     // 皮肤按钮与三键组的间隔
+    float skinBtnIcon = 13;   // 皮肤按钮图标尺寸
+    // 右键菜单内部几何（自 chrome.cpp 字面量提升）
+    float ctxPadX = 12, ctxCheckW = 20, ctxRightPad = 16;
+    float ctxItemH = 26, ctxSepH = 9, ctxPadY = 5;
+    float ctxRadius = 8, ctxAnchorOffset = 2;
+    // OSD 内部几何（自 chrome.cpp 字面量提升；横向面板随 s 缩放）
+    float osdIconPad = 30, osdIconHalf = 9, osdTextGap = 18, osdRightPad = 24;
+    float osdIconR = 15, osdActIconR = 18, osdSpeedPad = 36;
+    float osdVolIconR = 14, osdVolIconY = 24, osdBarTopY = 40, osdPctBottom = 18;
+    // 媒体徽章 / 顶栏位置（自 render_loop / player_view 字面量提升）
+    float badgeRowGap = 6, badgeOriginX = 12;
+    float badgeOriginYWin = 10, badgeOriginYFs = 12;
+    float titleIconGap = 4, titleTextGap = 12, titleMaxRatio = 0.45f;
+    // 视频填充：true = cover（短边填满/居中/裁切，mpv panscan=1）；false = contain
+    bool stageCover = true;
     // 动效
     double idleHideSec = 2.5;   // 无操作隐去（d25：用户定 2.5s）
     double fadeSec = 0.3;       // 淡入淡出
@@ -165,6 +184,8 @@ struct Theme {
   // —— 皮肤表 ——
   static const Theme& get(const std::string& id);  // 未知 id 回落 fluent
   static const char* kSkinIds[6];
+  // d180：编译期兜底默认（= fluent 工厂）。JSON 加载以它为基底，坏值回退于此。
+  static Theme make_default();
 };
 
 // "#rrggbb" / "rgba(r,g,b,a)" → NVGcolor；解析失败返回品红（肉眼可查）

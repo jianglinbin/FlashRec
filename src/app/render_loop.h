@@ -19,6 +19,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "app/event_bus.h"
 #include "app/view_state.h"
@@ -99,6 +100,11 @@ class RenderLoop {
 
   // 画中画态：由主线程设置（渲染线程读，决定画什么）
   void set_pip(bool on) { pip_mode_ = on; force_dirty_.store(true, std::memory_order_release); }
+
+  // d182 皮肤引擎：运行时换肤 —— 主线程交接新 Theme，渲染线程帧首原子应用。
+  void set_theme(const Theme& t);
+  // 可用皮肤列表（id/显示名，顺序即下标）+ 当前下标；供顶栏皮肤弹层绘制与选择。
+  void set_skin_list(std::vector<std::string> ids, std::vector<std::string> names, int current);
   // 设备友好名（待机态显示用）
   void set_friendly_name(const char* n) {
     friendly_name_ = n ? n : "";
@@ -144,7 +150,18 @@ class RenderLoop {
   EventBus& bus_;
   PlayerController& player_;
   ViewStateChannel& channel_;
-  const Theme& theme_;
+  Theme theme_;  // d182：渲染线程持有（帧首可原子替换，见 set_theme）
+
+  // d182 换肤交接（主线程写 pending，渲染线程帧首取；theme_mu_ 保护）
+  std::mutex theme_mu_;
+  Theme theme_pending_;
+  bool theme_pending_valid_ = false;
+  std::vector<std::string> skin_ids_pending_, skin_names_pending_;
+  int skin_cur_pending_ = 0;
+  bool skin_pending_valid_ = false;
+  // 渲染线程自有的皮肤列表（帧首从 pending 取）
+  std::vector<std::string> skin_ids_, skin_names_;
+  int skin_cur_ = 0;
 
   std::thread thread_;
   std::atomic<bool> quit_{false};
@@ -208,6 +225,12 @@ class RenderLoop {
   bool speed_open_ = false;          // 弹层开着
   int speed_press_ = -1;             // 左键按住的条目下标（-1 = 无/弹层外）
   bool speed_lprev_ = false;         // 弹层开时的左键上一帧状态
+  // —— d182 皮肤弹层（渲染线程自有）——
+  bool skin_open_ = false;
+  int skin_press_ = -1;
+  bool skin_lprev_ = false;
+  float skin_ax_ = 0, skin_ay_ = 0;  // 锚点（光标入口）；顶栏按钮入口用按钮几何
+  bool skin_at_cursor_ = false;      // true = 锚在光标（右键「皮肤」入口）
   bool ctx_right_suppress_ = false;  // 菜单开时再按右键=关闭；该次弹起不得重开菜单
   float right_x_ = 0, right_y_ = 0;  // 右键按下位置（6px 防抖基准）
   bool show_info_ = false;           // d146：三合一徽章总开关（唯一菜单勾选项；持久化经 UiPrefChanged）

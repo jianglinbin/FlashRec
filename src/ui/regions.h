@@ -79,9 +79,11 @@ struct UiRegions {
   DmgRect thumb_card;   // 缩略图浮层 + 时间气泡包络带（横全宽，y 随锚点走）
   DmgRect ctx_menu;     // 右键菜单面板（render_loop 出帧路径用 ctx_lay 补填）
   DmgRect speed_menu;   // d169 倍速档位弹层（render_loop 出帧路径用 speed_lay 补填）
+  DmgRect skin_menu;    // d182 皮肤弹层（render_loop 出帧路径用 skin_lay 补填）
   DmgRect prompt_bar;   // d74 剪贴板链接提示条横幅
   // —— 控件级（P1/P3 归因粒度）——
   DmgRect win_btn[3];             // 顶栏三键热区
+  DmgRect skin_btn;               // d182：顶栏皮肤按钮热区
   DmgRect bar_btn[kBtnIdCount];   // 底栏按钮热区（媒体类无会话时仍给几何，归因门控）
   DmgRect track, time_cur, time_left;
   DmgRect volume;                 // 音量条 + 滑块包络（热区同式 bar_hit.vol）

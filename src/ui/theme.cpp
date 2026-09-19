@@ -337,6 +337,8 @@ const SkinFactory kFactories[] = {
 
 const char* Theme::kSkinIds[6] = {"fluent", "frost", "amber", "teal", "neon", "mono"};
 
+Theme Theme::make_default() { return make_fluent(); }
+
 const Theme& Theme::get(const std::string& id) {
   // 每皮肤构造一次、缓存复用（朴素静态表足够）
   static Theme cache[6];

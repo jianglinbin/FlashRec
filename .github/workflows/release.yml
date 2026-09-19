@@ -1,0 +1,121 @@
+name: build-packages
+
+# 四件安装包：Windows zip + setup.exe、Linux deb + AppImage。
+# - 手动触发：只构建 + 上传 Actions artifact（用于验证）。
+# - push tag v*：两个平台都成功后，把**四件一起**挂到 GitHub Release（规则 12 全平台齐发）。
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: ilammy/msvc-dev-cmd@v1        # 装好 cl + INCLUDE/LIB/PATH
+
+      # 用 vswhere 定位 VS/SDK，导出 FR_*（msvc_env.sh 会优先采用，见 d187）
+      - name: Locate MSVC/SDK
+        shell: bash
+        run: |
+          VS=$( "/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" \
+                -latest -products '*' \
+                -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 \
+                -property installationPath | tr -d '\r' )
+          VS=$(cygpath -m "$VS")
+          MSVC=$(ls -1d "$VS"/VC/Tools/MSVC/* | sort -V | tail -1)
+          SDKROOT="C:/Program Files (x86)/Windows Kits/10"
+          SDKVER=$(ls -1d "$SDKROOT"/Include/10.* | sort -V | tail -1 | xargs -n1 basename)
+          {
+            echo "FR_MSVC=$MSVC"
+            echo "FR_SDK=$SDKROOT"
+            echo "FR_SDKVER=$SDKVER"
+            echo "FR_BT=$VS/Common7/IDE/CommonExtensions/Microsoft/CMake"
+            echo "FR_CMAKE=$VS/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"
+            echo "FR_NINJA=$VS/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe"
+            echo "FR_RC=$SDKROOT/bin/$SDKVER/x64/rc.exe"
+            echo "FR_MT=$SDKROOT/bin/$SDKVER/x64/mt.exe"
+          } >> "$GITHUB_ENV"
+          echo "MSVC=$MSVC" >> "$GITHUB_ENV"
+
+      - name: Fetch third-party deps
+        shell: bash
+        run: bash tools/fetch_deps.sh
+
+      # Windows 额外依赖：pthreads4w（fetch_deps 不管，CMake 需要其 install 前缀）
+      - name: Build pthreads4w
+        shell: bash
+        run: |
+          [ -d third_party/pthreads4w/install ] && exit 0
+          git clone --depth 1 https://github.com/Vollstrecker/pthreads4w.git third_party/pthreads4w
+          "$FR_CMAKE" -S "$(cygpath -m "$PWD/third_party/pthreads4w")" -B build-pthreads -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$FR_MSVC/bin/Hostx64/x64/cl.exe" \
+            -DCMAKE_MAKE_PROGRAM="$FR_NINJA" \
+            -DCMAKE_INSTALL_PREFIX="$(cygpath -m "$PWD/third_party/pthreads4w/install")"
+          "$FR_CMAKE" --build build-pthreads
+          "$FR_CMAKE" --install build-pthreads
+
+      - name: Package Windows
+        shell: bash
+        run: bash tools/package_windows.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win
+          path: |
+            dist/FlashRec-*-win64.zip
+            dist/FlashRec-*-win64-setup.exe
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build patchelf wget dpkg-dev pkg-config \
+            libmpv-dev libsystemd-dev python3 python3-venv
+      - name: Fetch third-party deps
+        run: bash tools/fetch_deps.sh
+      - name: Package Linux (deb + AppImage)
+        run: bash tools/package_linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/flashrec_*_amd64.deb
+            dist/FlashRec-*-x86_64.AppImage
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verify four installers present
+        run: |
+          ls -l dist
+          n=$(ls dist | grep -Ec 'FlashRec-.*-win64\.zip|FlashRec-.*-win64-setup\.exe|flashrec_.*_amd64\.deb|FlashRec-.*-x86_64\.AppImage')
+          [ "$n" = "4" ] || { echo "四件不齐（$n/4）→ 中止发布"; exit 1; }
+          (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/FlashRec-*-win64.zip
+            dist/FlashRec-*-win64-setup.exe
+            dist/flashrec_*_amd64.deb
+            dist/FlashRec-*-x86_64.AppImage
+            dist/SHA256SUMS.txt

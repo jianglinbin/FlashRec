@@ -49,6 +49,8 @@ class PlayerController {
   // d125：渲染线程用 SEH 接住显卡驱动异常后上报（见 platform/seh_guard.h），
   // 使下帧的 switch_video_backend_if_needed() 生效
   void report_gl_crash();
+  // d184：视频填充（cover=1 / contain=0）
+  void set_panscan(double p);
   // d151：后端降级后按位重载续播（主线程 tick 内调用；切换本身由渲染线程做）。
   // 返回 true = 本次真的重载了当前文件。
   bool reload_after_backend_switch();

@@ -105,6 +105,9 @@ uint32_t hover_key_of(NVGcontext* vg, const Theme& t, float w, float h,
       if (in.mx >= bx && in.mx < bx + L.winBtnW && in.my >= 0.f && in.my < L.topBarH)
         key |= 1u << i;
     }
+    // d182：顶栏皮肤按钮悬停（bit 17）
+    const SkinBtnGeom sb = skin_button_geom(t, w);
+    if (in.mx >= sb.x && in.mx < sb.x + sb.w && in.my >= 0.f && in.my < sb.h) key |= 1u << 17;
   }
   const BarHit bh = bar_hit(vg, t, w, h, snap, in, media);
   if (bh.play) key |= 1u << 3;
@@ -164,6 +167,30 @@ void draw_prompt_btn(NVGcontext* vg, const Theme& t, float x, float y, float w, 
 RenderLoop::RenderLoop(WindowGLFW& window, EventBus& bus, PlayerController& player,
                        ViewStateChannel& channel, const Theme& theme)
     : window_(window), bus_(bus), player_(player), channel_(channel), theme_(theme) {}
+
+// d182：运行时换肤交接（主线程调）。渲染线程帧首应用，切换后整窗重绘。
+void RenderLoop::set_theme(const Theme& t) {
+  {
+    std::lock_guard<std::mutex> lk(theme_mu_);
+    theme_pending_ = t;
+    theme_pending_valid_ = true;
+  }
+  force_dirty_.store(true, std::memory_order_release);
+  wake();
+}
+
+void RenderLoop::set_skin_list(std::vector<std::string> ids, std::vector<std::string> names,
+                               int current) {
+  {
+    std::lock_guard<std::mutex> lk(theme_mu_);
+    skin_ids_pending_ = std::move(ids);
+    skin_names_pending_ = std::move(names);
+    skin_cur_pending_ = current;
+    skin_pending_valid_ = true;
+  }
+  force_dirty_.store(true, std::memory_order_release);
+  wake();
+}
 
 RenderLoop::~RenderLoop() { stop(); }
 
@@ -335,6 +362,21 @@ void RenderLoop::frame(double now) {
   const int h = window_.height();
   if (w <= 0 || h <= 0) return;
 
+  // d182：帧首应用主线程交接的皮肤/列表（渲染线程独占 theme_，无锁竞争）
+  {
+    std::lock_guard<std::mutex> lk(theme_mu_);
+    if (theme_pending_valid_) {
+      theme_ = theme_pending_;
+      theme_pending_valid_ = false;
+    }
+    if (skin_pending_valid_) {
+      skin_ids_ = std::move(skin_ids_pending_);
+      skin_names_ = std::move(skin_names_pending_);
+      skin_cur_ = skin_cur_pending_;
+      skin_pending_valid_ = false;
+    }
+  }
+
   // d63：prev_now_ 的推进移到**出帧路径**（闸门放行后）——跳帧（限帧/静默）
   // 不吞时间：跳过的间隔累进到下一出帧帧的 dt，approach 类动画（按钮缓动等）
   // 的时长不被限帧拉长、不变形。
@@ -365,13 +407,17 @@ void RenderLoop::frame(double now) {
   // —— d45：右键菜单状态机（必须跑在跳帧判定**之前**：按下/弹起边沿一帧都不能漏，
   //     否则"按下记位、弹起开菜单"的配对会错乱。状态切换时置 force_dirty 保证
   //     开/关的那一帧一定被画出来）——
-  // 进画中画：右键菜单 / 倍速弹层连带关闭
-  if (pip_mode_ && (ctx_open_ || speed_open_)) {
+  // 进画中画：右键菜单 / 倍速弹层 / 皮肤弹层连带关闭
+  if (pip_mode_ && (ctx_open_ || speed_open_ || skin_open_)) {
     ctx_open_ = false;
     speed_open_ = false;
+    skin_open_ = false;
   }
   if (menu_dismiss_.exchange(false, std::memory_order_acq_rel)) {  // 主线程 ESC 请求
-    if (speed_open_) {                                             // d169：先收倍速弹层
+    if (skin_open_) {                                              // d182：先收皮肤弹层
+      skin_open_ = false;
+      force_dirty_.store(true, std::memory_order_release);
+    } else if (speed_open_) {                                      // d169：再收倍速弹层
       speed_open_ = false;
       force_dirty_.store(true, std::memory_order_release);
     } else if (ctx_open_) {
@@ -495,8 +541,8 @@ void RenderLoop::frame(double now) {
   // 与 GetSystemMetrics 同口径 → scale 恒传 1（接口保留 scale 给未来缩放渲染）。
   {
     const InteractionThresholds thr = interaction_thresholds(1.f);
-    if (pip_mode_ || ctx_open_ || speed_open_) {
-      // 画中画/右键菜单/倍速弹层接管期间：打断进行中的按压（各自语义自理，见 d25/d45/d169）
+    if (pip_mode_ || ctx_open_ || speed_open_ || skin_open_) {
+      // 画中画/右键菜单/倍速弹层/皮肤弹层接管期间：打断进行中的按压（见 d25/d45/d169/d182）
       if (ptr_state_ != PtrState::Idle) {
         ptr_state_ = PtrState::Idle;
         in_dbl_ = false;
@@ -516,8 +562,10 @@ void RenderLoop::frame(double now) {
       if (down_edge) {
         // 按下归类（弹起沿用）：顶栏空白（纯几何）→ Widget（任一悬停位）→ Stage。
         // 顶栏三键落在 hover bit0-2 → Widget；全屏态无顶栏（chrome 不渲染）。
+        const SkinBtnGeom sb = skin_button_geom(theme_, (float)w);
+        const bool on_skin_btn = in.mx >= sb.x && in.mx < sb.x + sb.w && in.my < sb.h;
         const bool top_bar = !in.fullscreen && in.my < Lay.topBarH &&
-                             in.mx < (float)w - 3.f * Lay.winBtnW;
+                             in.mx < (float)w - 3.f * Lay.winBtnW && !on_skin_btn;
         ptr_region_ = top_bar ? PtrRegion::TopBar
                               : (hover_key != 0 ? PtrRegion::Widget : PtrRegion::Stage);
         ptr_state_ = PtrState::Pressed;
@@ -628,7 +676,7 @@ void RenderLoop::frame(double now) {
   };
   // 悬停位 → 控件矩形（与 hover_key_of 位定义一一对应，几何取自 UiRegions）
   auto add_hover_rects = [&](uint32_t key, const UiRegions& Rg, bool center_vis) {
-    for (int b = 0; b <= 16; b++) {
+    for (int b = 0; b <= 17; b++) {
       if (!(key & (1u << b))) continue;
       switch (b) {
         case 0: case 1: case 2: dmg_add(Rg.win_btn[b]); break;
@@ -645,6 +693,7 @@ void RenderLoop::frame(double now) {
         case 12: if (center_vis) dmg_add(Rg.center_play); break;
         case 13: case 14: dmg_add(Rg.prompt_bar); break;  // d74 提示条两按钮
         case 16: dmg_add(Rg.bar_btn[kBtnSpeed]); break;   // d169 倍速键
+        case 17: dmg_add(Rg.skin_btn); break;             // d182 皮肤按钮
         default: break;
       }
     }
@@ -775,6 +824,7 @@ void RenderLoop::frame(double now) {
       if (b <= kBtnFullscreen) dmg_add(R.bar_btn[b]);
       else if (b <= kBtnWinClose) dmg_add(R.win_btn[b - kBtnWinMin]);
       else if (b == kBtnCenterPlay) dmg_add(R.center_play);
+      else if (b == kBtnSkin) dmg_add(R.skin_btn);  // d182：顶栏皮肤按钮缓动
       else dmg_add(R.prompt_bar);  // d74：kBtnClipPlay/kBtnClipIgnore（横幅内两按钮）
     }
     dmg_reasons |= 1u << 8;
@@ -787,6 +837,11 @@ void RenderLoop::frame(double now) {
   // —— d169：倍速弹层开着（hover 高亮/按下反馈；几何固定，用上帧存档）——
   if (speed_open_) {
     dmg_add(last_regions_.speed_menu);
+    dmg_reasons |= 1u << 4;
+  }
+  // —— d182：皮肤弹层开着 ——
+  if (skin_open_) {
+    dmg_add(last_regions_.skin_menu);
     dmg_reasons |= 1u << 4;
   }
   // —— 瞬时：诊断徽章内容变化（d62 重构）——
@@ -1039,7 +1094,8 @@ void RenderLoop::frame(double now) {
   // 按压/点击不落——菜单面板叠在哪块按钮上，点菜单就不能误触底下的按钮）。
   // 拖拽进行中的除外：传 false 会让松手瞬间误判"拖完提交"，故保持原值。
   ViewInput vin = in;
-  if ((ctx_open_ || speed_open_) && !in.drag_progress && !in.drag_volume) vin.down = false;
+  if ((ctx_open_ || speed_open_ || skin_open_) && !in.drag_progress && !in.drag_volume)
+    vin.down = false;
 
   // —— v0.4.0 d57 修：隐藏按钮的冻结值清理（buttons_busy 恒真 → 60fps 死循环）——
   // d54 的 busy 收敛前提是"每个按钮每帧都被 button_hit 推进"；但**本帧不绘制的
@@ -1054,6 +1110,7 @@ void RenderLoop::frame(double now) {
     if (in.fullscreen) {
       vin.btns.hover[kBtnWinMin] = vin.btns.hover[kBtnWinMax] = vin.btns.hover[kBtnWinClose] = 0.f;
       vin.btns.press[kBtnWinMin] = vin.btns.press[kBtnWinMax] = vin.btns.press[kBtnWinClose] = 0.f;
+      vin.btns.hover[kBtnSkin] = vin.btns.press[kBtnSkin] = 0.f;  // d182：全屏无顶栏
     }
     if (snap.state != TransportState::PausedPlayback) {
       vin.btns.hover[kBtnCenterPlay] = 0.f;
@@ -1092,6 +1149,7 @@ void RenderLoop::frame(double now) {
     // 全屏下该位置换成"停止" —— 全屏看不到标题栏关闭键，全屏菜单里放关应用项易误触。
     add(in.fullscreen ? "退出全屏" : "全屏", CtxAction::ToggleFullscreen, true);
     add("画中画", CtxAction::Pip, true);
+    add("皮肤", CtxAction::Skin, true);  // d182：打开皮肤弹层（右键为辅）
     add(nullptr, CtxAction::None, false);
     add("媒体信息（完整）", CtxAction::ShowMediaInfo, true, true, show_info_);
     add("投屏自动全屏", CtxAction::CastAutoFullscreen, true, true, cast_auto_fs_);
@@ -1118,6 +1176,25 @@ void RenderLoop::frame(double now) {
                            (int)speed_lay.h};
   }
 
+  // —— d182：皮肤弹层几何（开着的帧才需要；命中与绘制共用同一份）——
+  if (skin_open_ && skin_names_.empty()) skin_open_ = false;
+  SkinMenuLayout skin_lay;
+  int skin_hover = -1;
+  if (skin_open_) {
+    float ax, ay;
+    if (skin_at_cursor_) {
+      ax = skin_ax_;
+      ay = skin_ay_;
+    } else {
+      const SkinBtnGeom sb = skin_button_geom(theme_, (float)w);
+      ax = sb.x;
+      ay = sb.h;
+    }
+    skin_lay = skin_menu_layout(nvg_.ctx(), theme_, (float)w, (float)h, ax, ay, skin_names_);
+    skin_hover = skin_menu_item_at(skin_lay, in.mx, in.my);
+    R.skin_menu = DmgRect{(int)skin_lay.x, (int)skin_lay.y, (int)skin_lay.w, (int)skin_lay.h};
+  }
+
   // 中键：音量区 = 静音切换（与点音量图标同义）
   if (in.down_middle && !mid_prev_) {
     if (bh.vol) channel_.post_intent({UiIntent::Kind::Mute, 0, !snap.muted});
@@ -1142,6 +1219,15 @@ void RenderLoop::frame(double now) {
           channel_.post_intent({UiIntent::Kind::ToggleFullscreen});
           break;
         case CtxAction::Pip: channel_.post_intent({UiIntent::Kind::Pip}); break;
+        case CtxAction::Skin:  // d182：右键入口打开皮肤弹层（锚在光标）
+          skin_open_ = true;
+          skin_at_cursor_ = true;
+          skin_ax_ = ctx_anchor_x_;
+          skin_ay_ = ctx_anchor_y_;
+          skin_press_ = -1;
+          skin_lprev_ = false;
+          force_dirty_.store(true, std::memory_order_release);
+          break;
         // d146：勾选在渲染线程即时生效（本帧反馈）；同时回投主线程落盘（R1）。
         // force_dirty_：徽章整列出现/消失 + 包络并集失效兜底，全窗刷新最稳（低频事件）。
         case CtxAction::ShowMediaInfo:
@@ -1184,6 +1270,19 @@ void RenderLoop::frame(double now) {
       force_dirty_.store(true, std::memory_order_release);
     }
     speed_lprev_ = in.down;
+  }
+
+  // —— d182：皮肤弹层左键交互（同条目按下+弹起才激活；点面板外=只关）——
+  if (skin_open_) {
+    if (in.down && !skin_lprev_) {
+      skin_press_ = skin_hover;
+    } else if (!in.down && skin_lprev_) {
+      if (skin_press_ >= 0 && skin_hover == skin_press_)
+        channel_.post_intent({UiIntent::Kind::SkinChanged, (double)skin_press_, false});
+      skin_open_ = false;
+      force_dirty_.store(true, std::memory_order_release);
+    }
+    skin_lprev_ = in.down;
   }
 
   // —— 画面贴图（圆角内落地，四角保持透明）——
@@ -1242,6 +1341,19 @@ void RenderLoop::frame(double now) {
     force_dirty_.store(true, std::memory_order_release);
     wake();
   };
+  // d182：顶栏皮肤按钮点击 → 切换皮肤弹层（锚在按钮下方）
+  cb.on_skin = [this] {
+    skin_open_ = !skin_open_;
+    if (skin_open_) {
+      ctx_open_ = false;
+      speed_open_ = false;
+      skin_at_cursor_ = false;
+    }
+    skin_press_ = -1;
+    skin_lprev_ = false;
+    force_dirty_.store(true, std::memory_order_release);
+    wake();
+  };
   if (pip_mode_) {
     // 画中画：有画面时只有画面；待机态给小窗专用缩小版内容（底色 + 设备名 + 等待投屏）
     if (!have_src)
@@ -1296,8 +1408,8 @@ void RenderLoop::frame(double now) {
       media_.acodec = st.audio_codec;
       media_.hwname = st.hwdec_name;
     }
-    const float px = 12.f;
-    const float py = in.fullscreen ? 12.f : L.topBarH + 10.f;
+    const float px = L.badgeOriginX;
+    const float py = in.fullscreen ? L.badgeOriginYFs : L.topBarH + L.badgeOriginYWin;
     if (show_info_) {
       // 行文本（取不到的字段显示 "-" 不猜；音频行任一字段有值即画）
       char r1[64], r2[160], r3[160];
@@ -1370,7 +1482,7 @@ void RenderLoop::frame(double now) {
         rounded_rect(nvg_.ctx(), px, yy, bw, bh, L.badgeRadius, theme_.badgeBg);
         text(nvg_.ctx(), theme_, px + L.badgePadX, yy + bh * 0.5f, L.badgeFont,
              theme_.badgeText, s);
-        yy += bh + 6;
+        yy += bh + L.badgeRowGap;
       };
       for (int i = 0; i < rows_n; ++i) badge(rows[i]);
     } else {
@@ -1383,7 +1495,7 @@ void RenderLoop::frame(double now) {
         rounded_rect(nvg_.ctx(), px, yy, bw, bh, L.badgeRadius, theme_.badgeBg);
         text(nvg_.ctx(), theme_, px + L.badgePadX, yy + bh * 0.5f, L.badgeFont,
              theme_.badgeText, s);
-        yy += bh + 6;
+        yy += bh + L.badgeRowGap;
       };
       if (show_video_fps_) {
         if (media_.vfps > 0)
@@ -1472,6 +1584,10 @@ void RenderLoop::frame(double now) {
   // —— d169：倍速档位弹层（在剪贴板提示条之上、右键菜单之下）——
   if (!pip_mode_ && speed_open_)
     draw_speed_menu(nvg_.ctx(), theme_, speed_lay, snap.speed, speed_hover, clip);
+
+  // —— d182：皮肤弹层 ——
+  if (!pip_mode_ && skin_open_)
+    draw_skin_menu(nvg_.ctx(), theme_, skin_lay, skin_names_, skin_cur_, skin_hover, clip);
 
   // —— d45：右键菜单（全栈最顶层：盖过视图与徽章）——
   if (!pip_mode_ && ctx_open_)

@@ -154,6 +154,12 @@ UiRegions compute_regions(NVGcontext* vg, const Theme& t, float w, float h,
     const float bx = w - (float)(3 - i) * L.winBtnW;
     R.win_btn[i] = DmgRect{dm(bx), 0, dm(L.winBtnW), dm(L.topBarH)};
   }
+  // d182：顶栏皮肤按钮
+  {
+    const SkinBtnGeom sb = skin_button_geom(t, w);
+    R.skin_btn = DmgRect{dm(sb.x), 0, dm(sb.w), dm(sb.h)};
+    R.bar_btn[kBtnSkin] = R.skin_btn;
+  }
 
   // 底栏控件级热区（y 范围与 bar_hit 同式：栏身 ∩ 按钮带）
   const Geom g = geom_of(vg, t, w, h, snap, media);

@@ -59,6 +59,7 @@ struct UiIntent {
     Seek, Volume, Mute, Preview, DismissMenu, DragMove, ClipboardPlay, ClipboardDismiss,
     UiPrefChanged,  // R1：右键菜单勾选项变化 → 主线程落盘 settings.json
     Speed,          // d169：倍速选择（value = 倍速；主线程落盘 + 下发给播放器）
+    SkinChanged,    // d182：皮肤选择（value = 皮肤列表下标；主线程换肤 + 持久化）
   };
   // R1：可持久化 UI 偏好 id（UiPrefChanged 的 pref 载荷；与 settings.json 键一一对应）
   enum class UiPref { ShowInfo = 1, CastAutoFullscreen };

@@ -214,7 +214,8 @@ float btn_bg(NVGcontext* vg, const Theme& t, float cx, float cy, float d, float 
   const float k = 1.f - (1.f - t.layout.btnPressScale) * st.press;
   // 底色尺寸随按压同步缩小；圆角按比例收，避免小尺寸时圆角过大变"药丸"
   const float bw = box * k;
-  const float r = t.layout.btnRadius * k;
+  // d182 形状 token：btnCircle=true → 圆；否则按 btnRadius（mono 直角为 0）
+  const float r = (t.layout.btnCircle ? box * 0.5f : t.layout.btnRadius) * k;
   if (st.hover > 0.004f) {
     NVGcolor c = t.btnHoverBg;
     c.a *= st.hover;
@@ -473,6 +474,27 @@ void icon_fullscreen(NVGcontext* vg, float cx, float cy, float w, NVGcolor c) {
   corner(1, -1, 0, 0);
   corner(-1, 1, 0, 0);
   corner(-1, -1, 0, 0);
+}
+
+void icon_skin(NVGcontext* vg, float cx, float cy, float w, NVGcolor c) {
+  // 调色盘：外圈轮廓 + 三个色点（简洁、与其它线性图标同风格）
+  const float r = w * 0.5f;
+  nvgStrokeWidth(vg, 1.3f);
+  nvgStrokeColor(vg, c);
+  nvgBeginPath(vg);
+  nvgCircle(vg, cx, cy, r);
+  nvgStroke(vg);
+  nvgFillColor(vg, c);
+  const float d = w * 0.18f;
+  nvgBeginPath(vg);
+  nvgCircle(vg, cx - r * 0.42f, cy - r * 0.30f, d);
+  nvgFill(vg);
+  nvgBeginPath(vg);
+  nvgCircle(vg, cx + r * 0.06f, cy - r * 0.52f, d);
+  nvgFill(vg);
+  nvgBeginPath(vg);
+  nvgCircle(vg, cx + r * 0.48f, cy - r * 0.06f, d);
+  nvgFill(vg);
 }
 
 void win_button(NVGcontext* vg, const Theme& t, float x, float y, float w, float h, WinBtn kind,

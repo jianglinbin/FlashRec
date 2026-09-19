@@ -24,6 +24,7 @@ include(deps)
 set(FR_SOURCES
   src/main.cpp
   src/app/config.cpp
+  src/app/theme_loader.cpp   # d180：JSON 驱动皮肤加载（M1）
   src/app/event_bus.cpp
   src/app/log.cpp
   src/app/str_util.cpp
@@ -125,7 +126,8 @@ target_link_libraries(flashrec PRIVATE
 )
 if (WIN32)
   target_link_libraries(flashrec PRIVATE
-    opengl32 gdi32 shell32 comctl32 dwmapi user32 ws2_32 iphlpapi winmm dbghelp)
+    opengl32 gdi32 shell32 comctl32 dwmapi user32 ws2_32 iphlpapi winmm dbghelp
+    dxva2)  # d186：DDC/CI 读屏电源模式（VCP 0xD6）
 else()
   find_package(Threads REQUIRED)
   find_package(X11 REQUIRED)                     # global_cursor 用 XQueryPointer（d39）

@@ -31,6 +31,7 @@ void draw_empty_state(NVGcontext* vg, const Theme& t, float w, float h,
       text(vg, t, L.topBarPadL + 58, L.topBarH * 0.5f, L.badgeFont, t.mutedText, "投屏接收端");
     }
     draw_win_buttons(vg, t, w, in, cb, clip);
+    draw_skin_button(vg, t, w, in, cb, clip);  // d182：顶栏皮肤按钮
   }
 
   // —— 中央：设备名 + 引导文案 ——

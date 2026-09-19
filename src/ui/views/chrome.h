@@ -6,6 +6,9 @@
 //   - 可见性（画不画）由调用方决定：播放态两栏随不操作自动隐去、全屏时顶栏不画；待机态常显。
 //   - 可用性 media_enabled（= 有媒体会话）：播放·暂停 / 上下集 / 进度条 只在有会话时可用；
 //     窗口类控件（音量 / 画中画 / 全屏）任何状态全量可用。
+#include <string>
+#include <vector>
+
 #include <nanovg.h>
 
 #include "ui/damage.h"  // DmgRect（draw_* 的 clip 参数，v0.4.0 d56）
@@ -33,6 +36,7 @@ enum BtnId : int {
   kBtnCenterPlay,
   kBtnClipPlay,     // d74：剪贴板提示条「播放」按钮（横幅隐藏时 d57 冻结值清理）
   kBtnClipIgnore,   // d74：剪贴板提示条「忽略」按钮
+  kBtnSkin,         // d182：顶栏「皮肤按钮」
   kBtnIdCount
 };
 
@@ -73,6 +77,29 @@ float chrome_fade(NVGcontext* vg, const Theme& t, float w, float h, const Playba
 void draw_win_buttons(NVGcontext* vg, const Theme& t, float w, ViewInput& in, ViewCallbacks& cb,
                       const DmgRect* clip = nullptr);
 
+// —— d182：顶栏「皮肤按钮」（三键组左侧 skinBtnGap 处；绘制/命中同源）——
+struct SkinBtnGeom {
+  float x = 0, y = 0, w = 0, h = 0;
+};
+SkinBtnGeom skin_button_geom(const Theme& t, float win_w);
+void draw_skin_button(NVGcontext* vg, const Theme& t, float w, ViewInput& in, ViewCallbacks& cb,
+                      const DmgRect* clip = nullptr);
+
+// —— d182：皮肤弹层（绘制/命中共用同一份几何；names = 各皮肤显示名）——
+struct SkinMenuLayout {
+  float x = 0, y = 0, w = 0, h = 0, item_h = 0;
+  std::vector<float> ys;
+  int count = 0;
+};
+// anchor = 弹出锚点（顶栏按钮下缘 / 右键光标）；越界回夹进窗口
+SkinMenuLayout skin_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float win_h,
+                                float anchor_x, float anchor_y,
+                                const std::vector<std::string>& names);
+int skin_menu_item_at(const SkinMenuLayout& lay, float px, float py);  // -1 = 无
+void draw_skin_menu(NVGcontext* vg, const Theme& t, const SkinMenuLayout& lay,
+                    const std::vector<std::string>& names, int cur, int hover,
+                    const DmgRect* clip = nullptr);
+
 // 顶栏是否被三键占用（拖动区判定 / 空白处判定用）。
 // 定义在此：只有一行矩形判定，无需单独 .cpp；Theme 完整定义由调用方 include 保证。
 inline bool topbar_hit(const Theme& t, float w, float mx, float my);
@@ -105,7 +132,7 @@ enum class CtxAction {
   None, PlayPause, Prev, Next, Stop, ToggleFullscreen, Pip,
   // d146 R5：三项信息徽章合并为一项；R2：新增投屏自动全屏（两项均勾选 + R1 持久化）。
   // 旧 ShowInfo/ShowVideoFps/ShowUiFps 已废弃（台账记"已废弃"，编号不删）。
-  ShowMediaInfo, CastAutoFullscreen, Close,
+  ShowMediaInfo, CastAutoFullscreen, Skin, Close,
 };
 
 struct CtxMenuItem {

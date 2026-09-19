@@ -123,6 +123,10 @@ bool PlayerController::init_render(void* (*get_proc)(void* user, const char* nam
 
 VideoStats PlayerController::video_stats() { return mpv_ ? mpv_->get_video_stats() : VideoStats{}; }
 
+void PlayerController::set_panscan(double p) {
+  if (mpv_) mpv_->set_panscan(p);
+}
+
 // ---------------- 指令处理 ----------------
 
 void PlayerController::on_command(const DmrCommand& cmd) {

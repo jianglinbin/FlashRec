@@ -276,6 +276,8 @@ void MpvBridge::pump() {
 
 void MpvBridge::load_uri(const std::string& uri, double start_sec) {
   if (!mpv_) return;
+  // d184：每次加载应用视频填充（cover=1/contain=0；等价 CSS object-fit）
+  mpv_set_property(mpv_, "panscan", MPV_FORMAT_DOUBLE, &panscan_);
   std::string clean = uri_without_fragment(uri);
   double start = start_sec;
   if (start < 0) start = uri_start_fragment(uri);  // R1：#t=xx 进度载体
@@ -348,6 +350,11 @@ void MpvBridge::set_speed(double s) {
   if (s < 0.25) s = 0.25;
   if (s > 4.0) s = 4.0;
   mpv_set_property(mpv_, "speed", MPV_FORMAT_DOUBLE, &s);
+}
+
+void MpvBridge::set_panscan(double p) {
+  panscan_ = p < 0 ? 0 : (p > 1 ? 1 : p);
+  if (mpv_) mpv_set_property(mpv_, "panscan", MPV_FORMAT_DOUBLE, &panscan_);
 }
 
 double MpvBridge::get_time_pos() {

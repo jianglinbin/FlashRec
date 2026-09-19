@@ -19,6 +19,9 @@ struct MonitorInfo {
   char fp[160] = {};         // 指纹 "pos mode workarea"（记忆键）
 };
 
+// d186：显示器电源状态（DDC/CI 尽力而为）。Off/Unknown 的区别决定是否排除该屏。
+enum class MonitorPower { On, Off, Unknown };
+
 class WindowGLFW {
  public:
   ~WindowGLFW();
@@ -113,6 +116,8 @@ class WindowGLFW {
   // 已知边界：物理关机但信号保持的屏 GLFW 探测不到（仍在列表）——决策点 5 接受近似。
   static int monitor_count();
   static bool monitor_info(int idx, MonitorInfo* out);
+  // d186：屏是否点亮（尽力而为）。Windows = DDC/CI VCP 0xD6；无法判定返回 Unknown。
+  static MonitorPower monitor_power(int idx);
   int monitor_index_of_window() const;  // 窗口中心所在屏的枚举下标（-1 未知/不在任何屏）
   // 绑定指定屏全屏。已在该屏全屏 = no-op（不闪屏不重切，用户定值）；窗口态先保存
   // 还原矩形（同 toggle_fullscreen 语义，退出仍走 toggle_fullscreen）。

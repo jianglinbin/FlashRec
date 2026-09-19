@@ -28,26 +28,33 @@ clone spdlog https://github.com/gabime/spdlog.git    v1.14.1 &
 clone pupnp  https://github.com/pupnp/pupnp.git      branch-1.14.x &
 wait
 
-# glad：GL 3.3 核心加载器（pip 装生成器后离线生成，走清华镜像）
-if [ ! -f "third_party/glad/include/glad/gl.h" ]; then
-  PY_MGR="/c/Users/<user>/.workbuddy/binaries/python/versions/3.13.12/python.exe"
-  VENV="/c/Users/<user>/.workbuddy/binaries/python/envs/default"
-  if [ ! -x "$VENV/Scripts/python.exe" ]; then
-    "$PY_MGR" -m venv "$VENV" >>"$LOG" 2>&1
+# glad：GL 3.3 核心加载器（pip 装生成器后离线生成）
+# d187：python 不再写死 —— 优先 FR_PYTHON，其次 PATH 上的 python/python3（CI 友好）。
+PY="${FR_PYTHON:-$(command -v python || command -v python3 || true)}"
+PIP_INDEX="${FR_PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+if [ -f "third_party/glad/include/glad/gl.h" ]; then
+  echo "[skip] glad 已存在" | tee -a "$LOG"
+elif [ -z "$PY" ]; then
+  echo "[FAIL] 找不到 python（可设 FR_PYTHON）" | tee -a "$LOG"
+else
+  VENV="${FR_VENV:-third_party/.pyvenv}"
+  VP="$VENV/Scripts/python.exe"; [ -x "$VP" ] || VP="$VENV/bin/python"
+  if [ ! -x "$VP" ]; then
+    "$PY" -m venv "$VENV" >>"$LOG" 2>&1 && { VP="$VENV/Scripts/python.exe"; [ -x "$VP" ] || VP="$VENV/bin/python"; }
   fi
-  if "$VENV/Scripts/python.exe" -m pip install -q -i https://pypi.tsunghua.tsinghua.edu.cn/simple glad2 >>"$LOG" 2>&1 \
-     || "$VENV/Scripts/python.exe" -m pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple glad2 >>"$LOG" 2>&1; then
-    "$VENV/Scripts/python.exe" -m glad --generator c --api 'gl:core=3.3' --out-path third_party/glad >>"$LOG" 2>&1 \
+  [ -x "$VP" ] || VP="$PY"
+  if "$VP" -m pip install -q -i "$PIP_INDEX" glad2 >>"$LOG" 2>&1; then
+    "$VP" -m glad --generator c --api 'gl:core=3.3' --out-path third_party/glad >>"$LOG" 2>&1 \
       && echo "[ok] glad" | tee -a "$LOG" || echo "[FAIL] glad" | tee -a "$LOG"
   else
     echo "[FAIL] glad 生成器安装" | tee -a "$LOG"
   fi
-else
-  echo "[skip] glad 已存在" | tee -a "$LOG"
 fi
 
-# mpv-dev（libmpv 预编译开发包，含 import lib 与 dll）
-"C:/Users/<user>/.workbuddy/binaries/python/versions/3.13.12/python.exe" tools/fetch_mpv.py >>"$LOG" 2>&1 \
-  && echo "[ok] mpv-dev" | tee -a "$LOG" || echo "[FAIL] mpv-dev（详见 third_party/_fetch.log）" | tee -a "$LOG"
+# mpv-dev（libmpv 预编译开发包，含 import lib 与 dll；仅 Windows 需要）
+if [ -n "$PY" ]; then
+  "$PY" tools/fetch_mpv.py >>"$LOG" 2>&1 \
+    && echo "[ok] mpv-dev" | tee -a "$LOG" || echo "[FAIL] mpv-dev（详见 third_party/_fetch.log）" | tee -a "$LOG"
+fi
 
 echo "done" | tee -a "$LOG"

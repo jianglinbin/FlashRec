@@ -11,8 +11,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -26,6 +28,7 @@
 #endif
 #include "app/event_bus.h"
 #include "app/log.h"
+#include "app/theme_loader.h"  // d180：JSON 皮肤加载（M1）
 #include "app/render_loop.h"
 #include "app/view_state.h"
 #include "dmr/dmr_device.h"
@@ -42,6 +45,7 @@
 #include "player/thumb_preview.h"
 #include "player/url_probe.h"
 #include "ui/theme.h"
+#include "ui/theme_compare.h"  // d180：逐字段自检（M1）
 
 using namespace fr;
 
@@ -81,10 +85,26 @@ std::string extract_clipboard_url(const std::string& text) {
 // 可用屏收集：monitor_info 内部已做三步可用性判定（在列表 + 模式可取 + 工作区），
 // false = 休眠/拔线/禁用，直接跳过。返回收到的条数（≤cap）。
 int collect_monitors(MonitorInfo* out, int cap) {
-  int n = 0;
+  MonitorInfo raw[16];
+  int rn = 0;
   const int total = WindowGLFW::monitor_count();
-  for (int i = 0; i < total && n < cap; ++i)
-    if (WindowGLFW::monitor_info(i, &out[n])) ++n;
+  for (int i = 0; i < total && rn < 16; ++i)
+    if (WindowGLFW::monitor_info(i, &raw[rn])) ++rn;
+  // d186：屏电源判定（DDC/CI 尽力而为）。策略：若存在"可判定"的屏（On/Off），
+  // 则把"无响应(Unknown)"的屏也当作**已关**排除（本机实测：关屏 → DDC 无响应 ERR31）；
+  // 若全部 Unknown（系统/显示器不支持 DDC/CI），则不排除任何屏，保持原行为，避免误迁。
+  MonitorPower pw[16];
+  bool any_decided = false;
+  for (int i = 0; i < rn; ++i) {
+    pw[i] = WindowGLFW::monitor_power(raw[i].idx);
+    if (pw[i] != MonitorPower::Unknown) any_decided = true;
+  }
+  int n = 0;
+  for (int i = 0; i < rn && n < cap; ++i) {
+    if (pw[i] == MonitorPower::Off) continue;
+    if (pw[i] == MonitorPower::Unknown && any_decided) continue;
+    out[n++] = raw[i];
+  }
   return n;
 }
 
@@ -270,7 +290,47 @@ int main(int argc, char** argv) {
 
   // —— 窗口（主线程；GL 上下文稍后交给渲染线程）——
   WindowGLFW window;
-  const Theme& theme = Theme::get(cfg.skin);
+  // d181（M2）：皮肤由 JSON 驱动 —— 启动即从 assets/skins.json 载入 cfg.skin；
+  // 失败 / 缺 id 一律回落编译期默认（Theme::make_default），保证首帧必有可用皮肤。
+  Theme theme = Theme::make_default();
+  std::vector<NamedTheme> skin_pack;
+  std::vector<std::string> skin_warns;
+  std::string skin_err;
+  const std::string user_skins_dir = paths::app_data_dir() + "/skins";  // d183：用户皮肤目录
+  const bool skin_ok = load_all_skins(paths::asset_file("skins.json"), user_skins_dir,
+                                      Theme::make_default(), &skin_pack, &skin_warns, &skin_err);
+  bool skin_found = false;
+  if (skin_ok) {
+    for (const auto& s : skin_pack)
+      if (s.meta.id == cfg.skin) {
+        theme = s.theme;
+        skin_found = true;
+        break;
+      }
+    if (!skin_found) FR_LOG_WARN("[SKIN] 皮肤 {} 不在包内，回落默认", cfg.skin);
+    for (const auto& w : skin_warns) FR_LOG_WARN("[SKIN] {}", w);
+  } else {
+    FR_LOG_ERROR("[SKIN] 皮肤包加载失败：{}（回落默认）", skin_err);
+  }
+  FR_LOG_INFO("[SKIN] 当前皮肤 = {}（来源={}）", cfg.skin, skin_found ? "json" : "builtin");
+  // d180（M1）：自检开关 —— 校验 JSON 结果与内置 6 套逐字段一致。
+  if (std::getenv("FR_SKIN_SELFCHECK") && skin_ok) {
+    int ok = 0, bad = 0;
+    for (const auto& s : skin_pack) {
+      bool builtin = false;
+      for (int i = 0; i < 6; i++)
+        if (s.meta.id == Theme::kSkinIds[i]) builtin = true;
+      if (!builtin) continue;  // 用户皮肤不参与内置一致性自检
+      const char* d = theme_first_diff(s.theme, Theme::get(s.meta.id));
+      if (d) {
+        ++bad;
+        FR_LOG_WARN("[SKIN] 自检 {} 与内置不一致：{}", s.meta.id, d);
+      } else {
+        ++ok;
+      }
+    }
+    FR_LOG_WARN("[SKIN] 自检汇总：一致 {} / 不一致 {}（共 {}）", ok, bad, (int)skin_pack.size());
+  }
   if (!window.create(theme.layout.winW, theme.layout.winH, cfg.friendly_name.c_str())) {
     FR_LOG_ERROR("[APP] 窗口初始化失败，退出");
     shutdown_logger();
@@ -288,6 +348,20 @@ int main(int argc, char** argv) {
   {
     MonitorInfo ms[8];
     const int n = collect_monitors(ms, 8);
+    {  // d186：打印各屏电源判定，便于核对"关屏是否被排除"
+      const int total = WindowGLFW::monitor_count();
+      std::string sb;
+      for (int i = 0; i < total; ++i) {
+        const MonitorPower p = WindowGLFW::monitor_power(i);
+        const char* s = p == MonitorPower::On ? "on"
+                        : p == MonitorPower::Off ? "off" : "unknown";
+        char b[48];
+        std::snprintf(b, sizeof(b), " %d:%s", i, s);
+        sb += b;
+      }
+      FR_LOG_INFO("[APP] 屏幕电源判定：{} → 可用 {} 块", sb.c_str(), n);
+      spdlog::default_logger()->flush();  // 该行在启动早期，显式 flush 便于取证
+    }
     const MonitorMemory* newest = nullptr;
     for (const auto& m : cfg.ui_window_monitors)
       if (!newest || m.last_used > newest->last_used) newest = &m;
@@ -305,6 +379,7 @@ int main(int argc, char** argv) {
   if (!player.init()) {
     FR_LOG_ERROR("[APP] mpv 初始化失败（继续运行，投屏不可用）");
   }
+  player.set_panscan(theme.layout.stageCover ? 1.0 : 0.0);  // d184：视频填充 cover 默认
   // d163：恢复持久化的音量/静音 —— 上次调好的音量跨重启保留。bilibili 投屏开始
   // 在 Play 后 ~1.5s 才推 SetVolume，恢复缺位的窗口期就是"默认 100 最响很炸"的那段。
   if (cfg.player_volume != 100 || cfg.player_muted) {
@@ -367,6 +442,16 @@ int main(int argc, char** argv) {
   render.set_show_video_fps(cfg.ui_show_video_fps);
   render.set_show_info(cfg.ui_show_info);
   render.set_cast_auto_fullscreen(cfg.ui_cast_auto_fullscreen);
+  // d182：皮肤列表交给渲染线程（顶栏 / 右键皮肤弹层）；当前下标 = cfg.skin
+  std::vector<std::string> skin_ids, skin_names;
+  for (const auto& s : skin_pack) {
+    skin_ids.push_back(s.meta.id);
+    skin_names.push_back(s.meta.name.empty() ? s.meta.id : s.meta.name);
+  }
+  int cur0 = 0;
+  for (int i = 0; i < (int)skin_ids.size(); ++i)
+    if (skin_ids[i] == cfg.skin) cur0 = i;
+  render.set_skin_list(skin_ids, skin_names, cur0);
   if (cfg.ui_show_fps || cfg.ui_show_video_fps)
     FR_LOG_INFO("[APP] 帧率诊断开启：ui={} video={}", cfg.ui_show_fps, cfg.ui_show_video_fps);
   // 缩略图预览（d27）：worker 出目标帧 jpg → 渲染线程 nvgCreateImageMem 上传。
@@ -852,6 +937,45 @@ int main(int argc, char** argv) {
   //（详见 window_glfw.cpp 的 show_window 注释）。挂在 on_shown 上，显窗点无一可漏。
   window.on_shown = [&] { render.request_full_repaint(); };
 
+  // d182：换肤执行（皮肤列表下标）—— 更新主线程副本 + 交接渲染线程 + 落盘
+  auto apply_skin = [&](int idx) {
+    if (idx < 0 || idx >= (int)skin_pack.size()) return;
+    theme = skin_pack[idx].theme;
+    render.set_theme(skin_pack[idx].theme);
+    render.set_skin_list(skin_ids, skin_names, idx);
+    player.set_panscan(theme.layout.stageCover ? 1.0 : 0.0);  // d184：随皮肤更新填充
+    cfg.skin = skin_pack[idx].meta.id;
+    Config::patch(paths::config_file(), {{"ui", "skin", "\"" + cfg.skin + "\""}});
+    FR_LOG_INFO("[SKIN] 切换皮肤 = {}（已落盘）", cfg.skin);
+  };
+
+  // d183：热重载 —— 重扫内置 bundle + 用户目录（丢入新皮肤 json 后即时生效）
+  auto reload_skins = [&] {
+    std::vector<NamedTheme> pack;
+    std::vector<std::string> warns;
+    std::string err;
+    if (!load_all_skins(paths::asset_file("skins.json"), user_skins_dir, Theme::make_default(),
+                        &pack, &warns, &err)) {
+      FR_LOG_ERROR("[SKIN] 重载失败：{}", err);
+      return;
+    }
+    for (const auto& w : warns) FR_LOG_INFO("[SKIN] {}", w);
+    skin_pack = std::move(pack);
+    skin_ids.clear();
+    skin_names.clear();
+    for (const auto& s : skin_pack) {
+      skin_ids.push_back(s.meta.id);
+      skin_names.push_back(s.meta.name.empty() ? s.meta.id : s.meta.name);
+    }
+    int idx = 0;
+    for (int i = 0; i < (int)skin_ids.size(); ++i)
+      if (skin_ids[i] == cfg.skin) idx = i;
+    render.set_skin_list(skin_ids, skin_names, idx);
+    apply_skin(idx);
+    FR_LOG_WARN("[SKIN] 皮肤已重载（{} 套，当前 {}）", (int)skin_ids.size(),
+                skin_ids.empty() ? "" : skin_ids[idx]);
+  };
+
   // —— 意图执行（渲染线程 → 主线程）——
   auto exec_intent = [&](const UiIntent& it) {
     switch (it.kind) {
@@ -1004,6 +1128,9 @@ int main(int argc, char** argv) {
         player.on_command(c);
         break;
       }
+      case UiIntent::Kind::SkinChanged:  // d182
+        apply_skin((int)std::lround(it.value));
+        break;
       case UiIntent::Kind::Speed: {
         // d169：倍速选择 —— 落盘 player.speed、下发播放器、OSD 反馈。
         cfg.player_speed = it.value;
@@ -1076,6 +1203,22 @@ int main(int argc, char** argv) {
       window.hide_window();
     } else {
       if (glfwGetWindowAttrib(window.raw(), GLFW_ICONIFIED)) glfwRestoreWindow(window.raw());
+      // d186：所在屏若已关/不可用（如关掉副屏）→ 先迁移到可用屏再显示，避免显示在黑屏上
+      MonitorInfo ms[8];
+      const int n = collect_monitors(ms, 8);
+      const int cur = window.monitor_index_of_window();
+      bool cur_usable = false;
+      for (int i = 0; i < n; ++i)
+        if (ms[i].idx == cur) cur_usable = true;
+      if (n > 0 && !cur_usable) {
+        const MonitorInfo* tgt = pick_target(cfg, ms, n, -1);
+        if (tgt) {
+          if (window.fullscreen()) window.toggle_fullscreen();
+          apply_placement(window, *tgt, mem_for(cfg, tgt->fp));
+          FR_LOG_INFO("[APP] 所在屏不可用（关屏/拔出）→ 迁移到屏 {}（{}×{}）", tgt->idx, tgt->w,
+                      tgt->h);
+        }
+      }
       window.show_window();
     }
     publish_wake();  // 隐/显改变渲染可见性（隐窗后渲染线程可能沉睡）
@@ -1138,6 +1281,14 @@ int main(int argc, char** argv) {
                   }
                   if (n2 > 0) items.push_back(TrayMenuItem::Sep());
                 }
+                // d185：按用户要求，托盘右键菜单**去掉皮肤选择项**（改由顶栏皮肤按钮 / 右键菜单承载）。
+                // 仅保留「重载皮肤」这一功能性入口（热重载用户目录），它不是"皮肤选择"。
+                {
+                  TrayMenuItem rl;
+                  rl.id = 900;
+                  rl.label = "重载皮肤";
+                  items.push_back(rl);
+                }
                 TrayMenuItem quit;
                 quit.id = -1;
                 quit.label = "退出";
@@ -1160,6 +1311,10 @@ int main(int argc, char** argv) {
                     if (window.on_quit_request) window.on_quit_request();
                     break;
                   default:
+                    if (id == 900) {  // d183/d185：重载皮肤（托盘仅保留此功能入口）
+                      reload_skins();
+                      break;
+                    }
                     if (id >= 100) {  // d146 R4：托盘「投到屏幕 N」→ 迁移窗口到指定屏
                       MonitorInfo ms[8];
                       const int n2 = collect_monitors(ms, 8);

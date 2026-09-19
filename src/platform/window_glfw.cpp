@@ -2,6 +2,7 @@
 
 #include <chrono>   // d91：隐窗前等待在途交换的退避
 #include <thread>   // d91
+#include <vector>   // d186：DDC/CI 物理显示器枚举
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -9,6 +10,9 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 #include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
+// d186：DDC/CI 读显示器电源模式（VCP 0xD6）；依赖 dxva2.lib
+#include <lowlevelmonitorconfigurationapi.h>
+#include <physicalmonitorenumerationapi.h>
 #elif defined(__linux__)
 #define GLFW_EXPOSE_NATIVE_X11
 #include <GLFW/glfw3native.h>   // 含 X11/Xlib.h（XQueryPointer 需要）
@@ -185,6 +189,44 @@ bool WindowGLFW::monitor_info(int idx, MonitorInfo* out) {
   snprintf(out->fp, sizeof(out->fp), "%d,%d %dx%d %d,%d %dx%d", x, y, vm->width, vm->height,
            ax, ay, aw, ah);
   return true;
+}
+
+// d186：屏是否点亮 —— DDC/CI VCP 0xD6（Power Mode）。0x01=On；其余(0x02-0x05)=待机/关；
+// 查询失败（如关屏后显示器不再响应 I2C，实测 ERROR_GEN_FAILURE=31）= Unknown。
+// 注意：DDC/CI 非全部显示器/驱动都支持，故 Unknown 不直接判"关"，由调用侧结合
+// "是否存在可判定的屏"决定（见 main::collect_monitors）。
+MonitorPower WindowGLFW::monitor_power(int idx) {
+#ifdef _WIN32
+  int n = 0;
+  GLFWmonitor** mons = glfwGetMonitors(&n);
+  if (idx < 0 || idx >= n) return MonitorPower::Unknown;
+  int mx = 0, my = 0;
+  glfwGetMonitorPos(mons[idx], &mx, &my);
+  const GLFWvidmode* vm = glfwGetVideoMode(mons[idx]);
+  if (!vm) return MonitorPower::Unknown;
+  POINT p{mx + vm->width / 2, my + vm->height / 2};
+  HMONITOR hm = MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST);
+  DWORD cnt = 0;
+  if (!GetNumberOfPhysicalMonitorsFromHMONITOR(hm, &cnt) || cnt == 0)
+    return MonitorPower::Unknown;
+  std::vector<PHYSICAL_MONITOR> pm(cnt);
+  if (!GetPhysicalMonitorsFromHMONITOR(hm, cnt, pm.data())) return MonitorPower::Unknown;
+  bool any_ok = false, on = false;
+  for (DWORD i = 0; i < cnt; ++i) {
+    MC_VCP_CODE_TYPE type = MC_VCP_CODE_TYPE(0);
+    DWORD cur = 0, maxv = 0;
+    if (GetVCPFeatureAndVCPFeatureReply(pm[i].hPhysicalMonitor, 0xD6, &type, &cur, &maxv)) {
+      any_ok = true;
+      if (cur == 0x01) on = true;
+    }
+    DestroyPhysicalMonitor(pm[i].hPhysicalMonitor);
+  }
+  if (!any_ok) return MonitorPower::Unknown;
+  return on ? MonitorPower::On : MonitorPower::Off;
+#else
+  (void)idx;
+  return MonitorPower::Unknown;  // X11/Wayland 暂不判定（后续可接 xrandr DPMS）
+#endif
 }
 
 int WindowGLFW::monitor_index_of_window() const {

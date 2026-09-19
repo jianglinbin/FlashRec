@@ -126,6 +126,87 @@ void draw_win_buttons(NVGcontext* vg, const Theme& t, float w, ViewInput& in, Vi
   }
 }
 
+// —— d182：顶栏「皮肤按钮」几何（三键组左侧 skinBtnGap 处；绘制/命中同源）——
+SkinBtnGeom skin_button_geom(const Theme& t, float win_w) {
+  const auto& L = t.layout;
+  SkinBtnGeom g;
+  g.w = L.skinBtnSize;
+  g.h = L.topBarH;
+  g.y = 0;
+  g.x = win_w - 3.f * L.winBtnW - L.skinBtnGap - g.w;
+  return g;
+}
+
+void draw_skin_button(NVGcontext* vg, const Theme& t, float w, ViewInput& in, ViewCallbacks& cb,
+                      const DmgRect* clip) {
+  const auto& L = t.layout;
+  const SkinBtnGeom g = skin_button_geom(t, w);
+  const float cx = g.x + g.w * 0.5f;
+  const float cy = L.topBarH * 0.5f;
+  const bool inside = in.mx >= g.x && in.mx < g.x + g.w && in.my >= 0 && in.my < g.h;
+  BtnState st = button_hit(in.btns, kBtnSkin, inside, true, in.down, in.dt, t);
+  if (dmg_hit(clip, g.x, 0, g.w, g.h)) {
+    btn_bg(vg, t, cx, cy, L.skinBtnSize, L.skinBtnSize, st);
+    icon_skin(vg, cx, cy, L.skinBtnIcon * (1.f - (1.f - L.btnPressScale) * st.press),
+              btn_icon_color(t, st));
+  }
+  if (st.clicked && cb.on_skin) cb.on_skin();
+}
+
+SkinMenuLayout skin_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float win_h,
+                                float anchor_x, float anchor_y,
+                                const std::vector<std::string>& names) {
+  const auto& L = t.layout;
+  SkinMenuLayout lay;
+  lay.count = (int)names.size();
+  lay.item_h = L.ctxItemH;
+  float maxw = 0.f;
+  for (const auto& n : names) maxw = std::max(maxw, text_width(vg, L.titleFont, n.c_str()));
+  lay.w = L.ctxPadX + L.ctxCheckW + maxw + L.ctxRightPad;
+  lay.h = lay.count * lay.item_h + L.ctxPadY * 2;
+  lay.x = std::min(std::max(2.f, anchor_x), std::max(2.f, win_w - lay.w - 2.f));
+  lay.y = std::min(std::max(2.f, anchor_y + L.ctxAnchorOffset),
+                   std::max(2.f, win_h - lay.h - 2.f));
+  lay.ys.assign(lay.count, 0.f);
+  for (int i = 0; i < lay.count; i++) lay.ys[i] = L.ctxPadY + i * lay.item_h;
+  return lay;
+}
+
+int skin_menu_item_at(const SkinMenuLayout& lay, float px, float py) {
+  if (px < lay.x || px > lay.x + lay.w || py < lay.y || py > lay.y + lay.h) return -1;
+  for (int i = 0; i < lay.count; i++)
+    if (py >= lay.y + lay.ys[i] && py <= lay.y + lay.ys[i] + lay.item_h) return i;
+  return -1;
+}
+
+void draw_skin_menu(NVGcontext* vg, const Theme& t, const SkinMenuLayout& lay,
+                    const std::vector<std::string>& names, int cur, int hover,
+                    const DmgRect* clip) {
+  const auto& L = t.layout;
+  if (!dmg_hit(clip, lay.x, lay.y, lay.w, lay.h)) return;
+  rounded_rect(vg, lay.x, lay.y, lay.w, lay.h, L.ctxRadius, t.barBg);
+  for (int i = 0; i < lay.count; i++) {
+    const float iy = lay.y + lay.ys[i];
+    const bool hov = i == hover;
+    if (hov)
+      rounded_rect(vg, lay.x + 4.f, iy, lay.w - 8.f, lay.item_h, L.badgeRadius, t.btnHoverBg);
+    const float cy = iy + lay.item_h * 0.5f;
+    if (i == cur) {
+      const float x0 = lay.x + L.ctxPadX + 4.f;
+      nvgBeginPath(vg);
+      nvgMoveTo(vg, x0, cy + 1.f);
+      nvgLineTo(vg, x0 + 4.f, cy + 5.f);
+      nvgLineTo(vg, x0 + 11.f, cy - 4.f);
+      nvgStrokeColor(vg, t.played);
+      nvgStrokeWidth(vg, 2.f);
+      nvgLineCap(vg, NVG_ROUND);
+      nvgStroke(vg);
+    }
+    const NVGcolor col = hov ? t.icon : t.subText;
+    text(vg, t, lay.x + L.ctxPadX + L.ctxCheckW, cy, L.titleFont, col, names[i].c_str());
+  }
+}
+
 void draw_bottom_bar(NVGcontext* vg, const Theme& t, float w, float h,
                      const PlaybackSnapshot& snap, ViewInput& in, ViewCallbacks& cb,
                      bool media_enabled, float fade, bool show_thumb_preview, float rad,
@@ -380,12 +461,13 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
     const float py = L.osdTopGap;                                   // 固定顶距（d35）
     const float cx = px + L.osdVolW * 0.5f;
     rounded_rect(vg, px, py, L.osdVolW, L.osdVolH, L.osdRadius, t.barBg);
-    icon_volume(vg, cx, py + 24, 14, eff_muted(snap) ? t.muteIcon : t.icon);
+    icon_volume(vg, cx, py + L.osdVolIconY, L.osdVolIconR,
+                eff_muted(snap) ? t.muteIcon : t.icon);
     // 竖条：轨道圆角矩形，填充自底向上（进度语义：底=0 顶=100）
     // 布局（d31 用户反馈：文字与条重叠/贴边不居中）：图标带 py+15..29，条 py+40..110，
     // 文字中线 py+132（上距条底 15px、下距面板底 11px、两侧到图标带对称）
     const float bx = cx - L.osdBarThick * 0.5f;
-    const float by = py + 40;
+    const float by = py + L.osdBarTopY;
     rounded_rect(vg, bx, by, L.osdBarThick, L.osdBarLen, L.osdBarThick * 0.5f,
                  eff_muted(snap) ? t.muteTrack : t.track);
     const float fill = L.osdBarLen * clamp01((float)(in.osd_value / 100.0));
@@ -393,7 +475,7 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
       rounded_rect(vg, bx, by + L.osdBarLen - fill, L.osdBarThick, fill, L.osdBarThick * 0.5f,
                    eff_muted(snap) ? t.muteKnob : t.played);
     const std::string pct = std::to_string((int)(in.osd_value + 0.5)) + "%";
-    text(vg, t, cx, py + L.osdVolH - 18, L.osdFont, t.subText, pct.c_str(),
+    text(vg, t, cx, py + L.osdVolH - L.osdPctBottom, L.osdFont, t.subText, pct.c_str(),
          NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
   } else if (in.osd_kind == 2 || in.osd_kind == 3) {
     // —— 横向面板（d32 重写，kind2 进度 / kind3 动作反馈共用骨架）——
@@ -413,10 +495,10 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
     const float s = std::min(1.f, h * L.osdMaxHRatio / L.osdSeekH);
     const float ph = L.osdSeekH * s;
     const float cy = py + ph * 0.5f;
-    const float icon_cx = px + 30 * s;
-    const float icon_half = 9 * s;
-    const float gap = 18 * s;
-    const float right_pad = 24 * s;
+    const float icon_cx = px + L.osdIconPad * s;
+    const float icon_half = L.osdIconHalf * s;
+    const float gap = L.osdTextGap * s;
+    const float right_pad = L.osdRightPad * s;
 
     const char* label = nullptr;
     std::string text_buf;
@@ -443,16 +525,16 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
 
     if (in.osd_kind == 2) {
       if (in.osd_dir >= 1)
-        icon_next(vg, icon_cx, cy, 15 * s, t.icon);
+        icon_next(vg, icon_cx, cy, L.osdIconR * s, t.icon);
       else
-        icon_prev(vg, icon_cx, cy, 15 * s, t.icon);
+        icon_prev(vg, icon_cx, cy, L.osdIconR * s, t.icon);
     } else {
       const int id = (int)(in.osd_value + 0.5);
-      if (id == 1) icon_play(vg, icon_cx, cy, 18 * s, t.icon);
-      else if (id == 2) icon_pause(vg, icon_cx, cy, 18 * s, t.icon);
-      else if (id == 3 || id == 4) icon_fullscreen(vg, icon_cx, cy, 18 * s, t.icon);
-      else if (id == 5 || id == 6) icon_pip(vg, icon_cx, cy, 18 * s, t.icon);
-      else if (id == 7) icon_stop(vg, icon_cx, cy, 15 * s, t.icon);
+      if (id == 1) icon_play(vg, icon_cx, cy, L.osdActIconR * s, t.icon);
+      else if (id == 2) icon_pause(vg, icon_cx, cy, L.osdActIconR * s, t.icon);
+      else if (id == 3 || id == 4) icon_fullscreen(vg, icon_cx, cy, L.osdActIconR * s, t.icon);
+      else if (id == 5 || id == 6) icon_pip(vg, icon_cx, cy, L.osdActIconR * s, t.icon);
+      else if (id == 7) icon_stop(vg, icon_cx, cy, L.osdIconR * s, t.icon);
     }
 
     text(vg, t, icon_cx + icon_half + gap, cy, L.osdFont * s, t.subText, label,
@@ -465,7 +547,7 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
     const float ph = L.osdSeekH * s;
     const std::string label = "倍速 " + format_speed(in.osd_value);
     const float tw = text_width(vg, L.osdFont * s, label.c_str());
-    const float pw = tw + 36 * s;
+    const float pw = tw + L.osdSpeedPad * s;
     rounded_rect(vg, px, py, pw, ph, L.osdRadius * s, t.barBg);
     text(vg, t, px + pw * 0.5f, py + ph * 0.5f, L.osdFont * s, t.subText, label.c_str(),
          NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
@@ -476,13 +558,6 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
 // —— 右键上下文菜单（d45）——
 // 几何常量说明：菜单是临时浮层，尺寸常量取现有 token 就近组合（osdRadius 面板圆角 /
 // badgeRadius 悬停条圆角 / titleFont 条目字号），不为它新增 layout token。
-namespace {
-// 菜单内边距 / 勾选位宽（仅本组函数使用）
-constexpr float kCtxPadX = 12.f;    // 面板左内边距（文字前）
-constexpr float kCtxCheckW = 20.f;  // ✓ 勾选位宽（checkable 条目左留白，全表统一对齐）
-constexpr float kCtxRightPad = 16.f;
-}  // namespace
-
 int CtxMenuLayout::item_at(float px, float py) const {
   if (px < x || px > x + w || py < y || py > y + h) return -1;
   for (int i = 0; i < count; i++) {
@@ -497,9 +572,9 @@ CtxMenuLayout ctx_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float
   const auto& L = t.layout;
   CtxMenuLayout lay;
   lay.count = n;
-  lay.item_h = 26.f;
-  lay.sep_h = 9.f;
-  lay.pad_y = 5.f;
+  lay.item_h = L.ctxItemH;
+  lay.sep_h = L.ctxSepH;
+  lay.pad_y = L.ctxPadY;
   float maxw = 0.f, total = lay.pad_y;
   for (int i = 0; i < n && i < 16; i++) {
     lay.sep[i] = items[i].label == nullptr;
@@ -507,11 +582,13 @@ CtxMenuLayout ctx_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float
     total += lay.sep[i] ? lay.sep_h : lay.item_h;
     if (!lay.sep[i]) maxw = std::max(maxw, text_width(vg, L.titleFont, items[i].label));
   }
-  lay.w = kCtxPadX + kCtxCheckW + maxw + kCtxRightPad;
+  lay.w = L.ctxPadX + L.ctxCheckW + maxw + L.ctxRightPad;
   lay.h = total + lay.pad_y;
-  // 弹出点：锚点右下偏 2px；越界回夹进窗口（四边各留 2px）
-  lay.x = std::min(std::max(2.f, mx + 2.f), std::max(2.f, win_w - lay.w - 2.f));
-  lay.y = std::min(std::max(2.f, my + 2.f), std::max(2.f, win_h - lay.h - 2.f));
+  // 弹出点：锚点右下偏 ctxAnchorOffset；越界回夹进窗口（四边各留 2px）
+  lay.x = std::min(std::max(2.f, mx + L.ctxAnchorOffset),
+                   std::max(2.f, win_w - lay.w - 2.f));
+  lay.y = std::min(std::max(2.f, my + L.ctxAnchorOffset),
+                   std::max(2.f, win_h - lay.h - 2.f));
   return lay;
 }
 
@@ -520,7 +597,7 @@ void draw_ctx_menu(NVGcontext* vg, const Theme& t, const CtxMenuLayout& lay,
   const auto& L = t.layout;
   // 纯绘制段：面板矩形现成（lay），整面板早退安全
   if (!dmg_hit(clip, lay.x, lay.y, lay.w, lay.h)) return;
-  rounded_rect(vg, lay.x, lay.y, lay.w, lay.h, L.osdRadius, t.barBg);
+  rounded_rect(vg, lay.x, lay.y, lay.w, lay.h, L.ctxRadius, t.barBg);
   for (int i = 0; i < n && i < lay.count; i++) {
     const float iy = lay.y + lay.ys[i];
     if (lay.sep[i]) {
@@ -539,7 +616,7 @@ void draw_ctx_menu(NVGcontext* vg, const Theme& t, const CtxMenuLayout& lay,
     const float cy = iy + lay.item_h * 0.5f;
     if (items[i].checkable && items[i].checked) {
       // 手绘 ✓（两段线段；不依赖字体字形，禁用态也保持原勾选可见性）
-      const float x0 = lay.x + kCtxPadX + 4.f;
+      const float x0 = lay.x + L.ctxPadX + 4.f;
       nvgBeginPath(vg);
       nvgMoveTo(vg, x0, cy + 1.f);
       nvgLineTo(vg, x0 + 4.f, cy + 5.f);
@@ -552,7 +629,7 @@ void draw_ctx_menu(NVGcontext* vg, const Theme& t, const CtxMenuLayout& lay,
     // 禁用色用 iconDisabled（30% 白，与底栏图标禁用同一 token）：
     // mutedText(#9aa0aa) 与 subText(#babec6) 太接近，视觉上分不出禁用态（d45 用户实测）
     const NVGcolor col = items[i].enabled ? (hov ? t.icon : t.subText) : t.iconDisabled;
-    text(vg, t, lay.x + kCtxPadX + kCtxCheckW, cy, L.titleFont, col, items[i].label);
+    text(vg, t, lay.x + L.ctxPadX + L.ctxCheckW, cy, L.titleFont, col, items[i].label);
   }
 }
 
@@ -588,7 +665,7 @@ SpeedMenuLayout speed_menu_layout(NVGcontext* vg, const Theme& t, float win_w, f
   float maxw = 0.f;
   for (int i = 0; i < lay.count; i++)
     maxw = std::max(maxw, text_width(vg, L.speedFont, format_speed(speed_preset(i)).c_str()));
-  lay.w = kCtxPadX + kCtxCheckW + maxw + kCtxRightPad;
+  lay.w = L.ctxPadX + L.ctxCheckW + maxw + L.ctxRightPad;
   lay.h = lay.count * lay.item_h + L.speedMenuPadY * 2;
   lay.x = std::min(std::max(2.f, anchor_cx - lay.w * 0.5f),
                    std::max(2.f, win_w - lay.w - 2.f));
@@ -610,7 +687,7 @@ void draw_speed_menu(NVGcontext* vg, const Theme& t, const SpeedMenuLayout& lay,
                      double cur_speed, int hover, const DmgRect* clip) {
   const auto& L = t.layout;
   if (!dmg_hit(clip, lay.x, lay.y, lay.w, lay.h)) return;
-  rounded_rect(vg, lay.x, lay.y, lay.w, lay.h, L.osdRadius, t.barBg);
+  rounded_rect(vg, lay.x, lay.y, lay.w, lay.h, L.ctxRadius, t.barBg);
   const int cur = speed_preset_nearest(cur_speed);
   for (int i = 0; i < lay.count; i++) {
     const float iy = lay.y + lay.ys[i];
@@ -619,7 +696,7 @@ void draw_speed_menu(NVGcontext* vg, const Theme& t, const SpeedMenuLayout& lay,
       rounded_rect(vg, lay.x + 4.f, iy, lay.w - 8.f, lay.item_h, L.badgeRadius, t.btnHoverBg);
     const float cy = iy + lay.item_h * 0.5f;
     if (i == cur) {  // 当前档位打勾（与右键菜单同一手绘勾选样式）
-      const float x0 = lay.x + kCtxPadX + 4.f;
+      const float x0 = lay.x + L.ctxPadX + 4.f;
       nvgBeginPath(vg);
       nvgMoveTo(vg, x0, cy + 1.f);
       nvgLineTo(vg, x0 + 4.f, cy + 5.f);
@@ -630,7 +707,7 @@ void draw_speed_menu(NVGcontext* vg, const Theme& t, const SpeedMenuLayout& lay,
       nvgStroke(vg);
     }
     const NVGcolor col = hov ? t.icon : t.subText;
-    text(vg, t, lay.x + kCtxPadX + kCtxCheckW, cy, L.speedFont, col,
+    text(vg, t, lay.x + L.ctxPadX + L.ctxCheckW, cy, L.speedFont, col,
          format_speed(speed_preset(i)).c_str());
   }
 }
