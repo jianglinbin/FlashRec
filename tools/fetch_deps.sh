@@ -46,10 +46,12 @@ else
   [ -x "$VP" ] || VP="$PY"
   if "$VP" -m pip install -q --disable-pip-version-check -i "$PIP_INDEX" glad2 >>"$LOG" 2>&1 \
      || "$VP" -m pip install -q --disable-pip-version-check glad2 >>"$LOG" 2>&1; then
-    if "$VP" -m glad --generator c --api 'gl:core=3.3' --out-path third_party/glad >>"$LOG" 2>&1; then
+    # glad2 用**子命令** `c`（不是 glad1 的 --generator c）；两种语法都试，兼容新旧。
+    if "$VP" -m glad --api 'gl:core=3.3' --out-path third_party/glad c >>"$LOG" 2>&1 \
+       || "$VP" -m glad --generator c --api 'gl:core=3.3' --out-path third_party/glad >>"$LOG" 2>&1; then
       echo "[ok] glad" | tee -a "$LOG"
     else
-      echo "[FAIL] glad 生成失败，日志尾部：" | tee -a "$LOG"; tail -20 "$LOG"
+      echo "[FAIL] glad 生成失败，日志尾部：" | tee -a "$LOG"; tail -25 "$LOG"
     fi
   else
     echo "[FAIL] glad2 安装失败，日志尾部：" | tee -a "$LOG"; tail -20 "$LOG"
@@ -61,8 +63,11 @@ fi
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
     if [ -n "$PY" ]; then
-      "$PY" tools/fetch_mpv.py >>"$LOG" 2>&1 \
-        && echo "[ok] mpv-dev" | tee -a "$LOG" || echo "[FAIL] mpv-dev（详见 third_party/_fetch.log）" | tee -a "$LOG"
+      if "$PY" tools/fetch_mpv.py >>"$LOG" 2>&1; then
+        echo "[ok] mpv-dev" | tee -a "$LOG"
+      else
+        echo "[FAIL] mpv-dev，日志尾部：" | tee -a "$LOG"; tail -25 "$LOG"
+      fi
     fi
     ;;
   *) echo "[skip] mpv-dev（非 Windows，用系统 libmpv）" | tee -a "$LOG" ;;
