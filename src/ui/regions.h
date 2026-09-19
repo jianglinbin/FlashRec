@@ -26,9 +26,11 @@ struct PlaybackSnapshot;
 struct Geom {
   float botY = 0, cy = 0;
   float btnPlayX = 0, btnPrevX = 0, btnNextX = 0;
+  float btnStopX = 0;  // d158：停止键中心（= prev/next 两键中点；无上/下一集数据时使用）
   float timeCurX = 0, timeLeftX = 0;
   float trackX = 0, trackW = 0;
   float volIconX = 0, volX = 0, volW = 0;
+  float speedX = 0;  // d169：倍速按钮中心（位于倒计时时间之后、静音键之前）
   float pipX = 0, fsX = 0;
 };
 
@@ -76,6 +78,7 @@ struct UiRegions {
   DmgRect osd;          // OSD 包络带（与 draw_osd 的 dmg_hit 包络同式：横全宽）
   DmgRect thumb_card;   // 缩略图浮层 + 时间气泡包络带（横全宽，y 随锚点走）
   DmgRect ctx_menu;     // 右键菜单面板（render_loop 出帧路径用 ctx_lay 补填）
+  DmgRect speed_menu;   // d169 倍速档位弹层（render_loop 出帧路径用 speed_lay 补填）
   DmgRect prompt_bar;   // d74 剪贴板链接提示条横幅
   // —— 控件级（P1/P3 归因粒度）——
   DmgRect win_btn[3];             // 顶栏三键热区

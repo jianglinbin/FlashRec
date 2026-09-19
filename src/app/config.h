@@ -38,6 +38,10 @@ struct Config {
   std::vector<std::string> protocol_info;      // 空 = 用默认 Sink 串（不硬编码在 dmr/）
   // live
   int live_reconnect_max = 3;                  // R6：断流重连次数上限
+  // player（d163：音量/静音持久化 —— 上次调好的音量跨重启保留）
+  int player_volume = 100;
+  bool player_muted = false;
+  double player_speed = 1.0;  // d169：倍速持久化（player.speed，夹到 0.25..4.0）
 
   static Config load(const std::string& path);
   // GetProtocolInfo 的 Sink 串（每行带 DLNA.ORG_OP=01;DLNA.ORG_CI=0）

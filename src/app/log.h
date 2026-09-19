@@ -6,7 +6,9 @@
 
 namespace fr {
 
-void init_logger(const std::string& dir, const std::string& level);
+// with_console = 进程是否已有可写控制台（platform/console.*）：
+// 有才挂控制台 sink；无控制台（默认 GUI 子系统）时只写文件，避免无效句柄。
+void init_logger(const std::string& dir, const std::string& level, bool with_console);
 void shutdown_logger();
 int next_req_id();
 

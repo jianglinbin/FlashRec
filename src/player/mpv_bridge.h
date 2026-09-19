@@ -111,6 +111,7 @@ class MpvBridge {
   void seek_abs(double sec);
   void set_volume(int vol);  // 0-100
   void set_mute(bool m);
+  void set_speed(double s);  // d169：倍速（mpv speed 属性；1.0 = 原速）
 
   // —— 查询（主线程）——
   double get_time_pos();

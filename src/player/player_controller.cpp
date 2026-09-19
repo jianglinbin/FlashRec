@@ -138,6 +138,7 @@ void PlayerController::on_command(const DmrCommand& cmd) {
     case DmrCommand::Type::Seek: handle_seek(cmd, now); break;
     case DmrCommand::Type::SetVolume: handle_volume(cmd, now); break;
     case DmrCommand::Type::SetMute: handle_mute(cmd, now); break;
+    case DmrCommand::Type::SetSpeed: handle_speed(cmd, now); break;
     case DmrCommand::Type::SelectPreset: handle_preset(cmd, now); break;
   }
 }
@@ -373,6 +374,19 @@ void PlayerController::handle_mute(const DmrCommand& c, double now) {
   FR_LOG_INFO("[DMR] [req#{}] SetMute {}", c.req_id, c.mute ? "1" : "0");
 }
 
+void PlayerController::handle_speed(const DmrCommand& c, double now) {
+  // d169：本地倍速（控制栏选择）。夹到 [0.25, 4.0]；倍速是 mpv 全局属性，
+  // 跨 loadfile / 后端重载保持，无需在文件加载后重设。
+  double s = c.speed;
+  if (s < 0.25) s = 0.25;
+  if (s > 4.0) s = 4.0;
+  snap_.speed = s;
+  mpv_->set_speed(s);
+  publish_speed();
+  (void)now;
+  FR_LOG_INFO("[DMR] [req#{}] SetSpeed {:.2f}x", c.req_id, s);
+}
+
 void PlayerController::handle_preset(const DmrCommand& c, double now) {
   // RC：FactoryDefaults → 音量回默认、解除静音（DMR_SOAP_SPEC §1.2）
   // ★d134：官方预置名是**复数** `FactoryDefaults`（RCS:1 表 2-17），SCPD 的
@@ -557,6 +571,13 @@ void PlayerController::publish_media() {
 void PlayerController::publish_volume() {
   PlayerEvent e;
   e.kind = PlayerEvent::Kind::Volume;
+  e.snap = snap_;
+  bus_.publish_player(std::move(e));
+}
+
+void PlayerController::publish_speed() {
+  PlayerEvent e;
+  e.kind = PlayerEvent::Kind::Speed;
   e.snap = snap_;
   bus_.publish_player(std::move(e));
 }

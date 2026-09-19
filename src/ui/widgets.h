@@ -95,6 +95,9 @@ float round_btn_bg(NVGcontext* vg, const Theme& t, float cx, float cy, float d,
 // 同上，但尺寸由调用方给（中央大播放键用 d/box，底栏按钮用热区/底色）
 float btn_bg(NVGcontext* vg, const Theme& t, float cx, float cy, float d, float box,
              const BtnState& st);
+// d169：文字型 pill 按钮底座（宽高由调用方给；悬停/按压底色 + 按压缩放；返回缩放系数）
+float pill_btn_bg(NVGcontext* vg, const Theme& t, float cx, float cy, float w, float h,
+                  const BtnState& st);
 // 图标色：禁用 → iconDisabled；否则 iconDim → icon 按悬停量插值
 NVGcolor btn_icon_color(const Theme& t, const BtnState& st);
 
@@ -117,6 +120,7 @@ void volume_bar(NVGcontext* vg, const Theme& t, float cx, float cy, float w, flo
 // —— 图标（中心点定位；尺寸按 Theme 布局常量）——
 void icon_play(NVGcontext* vg, float cx, float cy, float h, NVGcolor c);
 void icon_pause(NVGcontext* vg, float cx, float cy, float h, NVGcolor c);
+void icon_stop(NVGcontext* vg, float cx, float cy, float w, NVGcolor c);
 void icon_prev(NVGcontext* vg, float cx, float cy, float w, NVGcolor c);
 void icon_next(NVGcontext* vg, float cx, float cy, float w, NVGcolor c);
 void icon_volume(NVGcontext* vg, float cx, float cy, float w, NVGcolor c);

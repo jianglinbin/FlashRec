@@ -114,8 +114,10 @@ uint32_t hover_key_of(NVGcontext* vg, const Theme& t, float w, float h,
   if (bh.time) key |= 1u << 7;
   if (bh.mute) key |= 1u << 8;
   if (bh.vol) key |= 1u << 9;
+  if (bh.speed) key |= 1u << 16;  // d169：倍速键悬停
   if (bh.pip) key |= 1u << 10;
   if (bh.fs) key |= 1u << 11;
+  if (bh.stop) key |= 1u << 15;  // d158：停止键（与 prev/next 位 4/5 互斥，位 13/14 已被提示条占用）
   if (snap.state == TransportState::PausedPlayback &&
       center_play_hit(t, w, h, in.mx, in.my))
     key |= 1u << 12;
@@ -363,9 +365,16 @@ void RenderLoop::frame(double now) {
   // —— d45：右键菜单状态机（必须跑在跳帧判定**之前**：按下/弹起边沿一帧都不能漏，
   //     否则"按下记位、弹起开菜单"的配对会错乱。状态切换时置 force_dirty 保证
   //     开/关的那一帧一定被画出来）——
-  if (pip_mode_ && ctx_open_) ctx_open_ = false;  // 进画中画：菜单连带关闭
+  // 进画中画：右键菜单 / 倍速弹层连带关闭
+  if (pip_mode_ && (ctx_open_ || speed_open_)) {
+    ctx_open_ = false;
+    speed_open_ = false;
+  }
   if (menu_dismiss_.exchange(false, std::memory_order_acq_rel)) {  // 主线程 ESC 请求
-    if (ctx_open_) {
+    if (speed_open_) {                                             // d169：先收倍速弹层
+      speed_open_ = false;
+      force_dirty_.store(true, std::memory_order_release);
+    } else if (ctx_open_) {
       ctx_open_ = false;
       force_dirty_.store(true, std::memory_order_release);
     } else {
@@ -386,6 +395,7 @@ void RenderLoop::frame(double now) {
         const float dx = in.mx - right_x_, dy = in.my - right_y_;
         if (dx * dx + dy * dy <= 36.f) {              // 原地弹起（6px 防抖，d25 同口径）
           ctx_open_ = true;
+          speed_open_ = false;                         // d169：右键菜单与倍速弹层互斥
           ctx_anchor_x_ = right_x_;
           ctx_anchor_y_ = right_y_;
           ctx_press_ = -1;
@@ -485,8 +495,8 @@ void RenderLoop::frame(double now) {
   // 与 GetSystemMetrics 同口径 → scale 恒传 1（接口保留 scale 给未来缩放渲染）。
   {
     const InteractionThresholds thr = interaction_thresholds(1.f);
-    if (pip_mode_ || ctx_open_) {
-      // 画中画/右键菜单接管期间：打断进行中的按压（各自语义自理，见 d25/d45）
+    if (pip_mode_ || ctx_open_ || speed_open_) {
+      // 画中画/右键菜单/倍速弹层接管期间：打断进行中的按压（各自语义自理，见 d25/d45/d169）
       if (ptr_state_ != PtrState::Idle) {
         ptr_state_ = PtrState::Idle;
         in_dbl_ = false;
@@ -618,13 +628,14 @@ void RenderLoop::frame(double now) {
   };
   // 悬停位 → 控件矩形（与 hover_key_of 位定义一一对应，几何取自 UiRegions）
   auto add_hover_rects = [&](uint32_t key, const UiRegions& Rg, bool center_vis) {
-    for (int b = 0; b <= 14; b++) {
+    for (int b = 0; b <= 16; b++) {
       if (!(key & (1u << b))) continue;
       switch (b) {
         case 0: case 1: case 2: dmg_add(Rg.win_btn[b]); break;
         case 3: dmg_add(Rg.bar_btn[kBtnPlay]); break;
         case 4: dmg_add(Rg.bar_btn[kBtnPrev]); break;
         case 5: dmg_add(Rg.bar_btn[kBtnNext]); break;
+        case 15: dmg_add(Rg.bar_btn[kBtnStop]); break;  // d158：停止键悬停
         case 6: dmg_add(Rg.track); break;
         case 7: dmg_add(Rg.time_cur); dmg_add(Rg.time_left); break;
         case 8: dmg_add(Rg.bar_btn[kBtnMute]); break;
@@ -633,6 +644,7 @@ void RenderLoop::frame(double now) {
         case 11: dmg_add(Rg.bar_btn[kBtnFullscreen]); break;
         case 12: if (center_vis) dmg_add(Rg.center_play); break;
         case 13: case 14: dmg_add(Rg.prompt_bar); break;  // d74 提示条两按钮
+        case 16: dmg_add(Rg.bar_btn[kBtnSpeed]); break;   // d169 倍速键
         default: break;
       }
     }
@@ -706,6 +718,10 @@ void RenderLoop::frame(double now) {
     dmg_add(R.volume); dmg_add(R.bar_btn[kBtnMute]);
     dmg_reasons |= 1u << 5;
   }
+  if (snap.speed != last_snap_.speed) {  // d169：按钮标签变化（弹层打勾开着的帧由持续条目覆盖）
+    dmg_add(R.bar_btn[kBtnSpeed]);
+    dmg_reasons |= 1u << 5;
+  }
   // —— 持续：面板淡入淡出窗口（底栏带 + 迷你线带；顶栏常显/中央键常显不参与）——
   if (!pip_mode_ && has_picture &&
       now - in.last_input < Lay.idleHideSec + Lay.fadeSec + 0.15) {
@@ -766,6 +782,11 @@ void RenderLoop::frame(double now) {
   // —— 持续：右键菜单开着（hover 高亮/按下反馈都在面板内；几何固定，用上帧存档）——
   if (ctx_open_) {
     dmg_add(last_regions_.ctx_menu);
+    dmg_reasons |= 1u << 4;
+  }
+  // —— d169：倍速弹层开着（hover 高亮/按下反馈；几何固定，用上帧存档）——
+  if (speed_open_) {
+    dmg_add(last_regions_.speed_menu);
     dmg_reasons |= 1u << 4;
   }
   // —— 瞬时：诊断徽章内容变化（d62 重构）——
@@ -847,8 +868,8 @@ void RenderLoop::frame(double now) {
     if (dmg_reasons & (1u << 8)) {
       // 按钮级细查：打出每个非收敛槽的 id 与值（d57 修复定位）
       static constexpr const char* kBtn[ButtonFx::kMax] = {
-          "play", "prev", "next", "mute", "pip",  "fs",
-          "winMin", "winMax", "winClose", "center", "b10", "b11", "b12", "b13", "b14", "b15"};
+          "play", "prev", "next", "stop", "speed", "mute", "pip", "fs",
+          "winMin", "winMax", "winClose", "center", "clipPlay", "clipIgnore", "b14", "b15"};
       for (int i = 0; i < ButtonFx::kMax; i++) {
         const float h = in.btns.hover[i];
         const float p = in.btns.press[i];
@@ -861,11 +882,15 @@ void RenderLoop::frame(double now) {
     last_dmg_log_ = now;
   }
 
-  // 是否处于"用户拖拽调整大小"中：期间冻结 FBO 重建与 mpv 重渲，
-  // 否则放大时每帧 glTexImage2D + 跑一遍视频管线，是拖拽卡顿的主因。
+  // 是否处于"用户拖拽调整大小"中。d63 曾整链冻结（FBO 重建 + mpv 重渲全停，
+  // 画面 = 旧帧拉伸）防「每帧 glTexImage2D + 全视频管线」拖拽卡顿；
+  // d161 改为**降帧续渲**：FBO 重建与 mpv 重渲共用 30fps 时钟（kLiveResizeVideoSec，
+  // 与 d63 动画限帧同先例），未到点的帧沿用旧容量 FBO 的有效内容拉伸顶上，
+  // 到点先按新尺寸重建再全渲染 —— 拖拽中视频持续更新且长宽比始终正确。
+  // 重建放行的依据：app_fbo_ 在 live_resize 中本就每帧精确重建实测无感
+  //（d60 注释：分配走驱动内存池），视频 FBO 同价；大头是 mpv 全管线，已限到 30fps。
   const bool live_resize = window_.interactive_resize();
-  // 拖动中不重建 FBO（用现有内容拉伸顶上），拖完再对齐精确尺寸
-  const bool allow_fbo_resize = !live_resize;
+  static constexpr double kLiveResizeVideoSec = 1.0 / 30.0;  // d161：拖拽中视频降帧间隔
   const bool size_changed = w != fbo_.width() || h != fbo_.height();
 
   // —— ① 视频路径：mpv → FBO（仅画面就绪时）——
@@ -879,9 +904,11 @@ void RenderLoop::frame(double now) {
     // d53：旗标在 frame() 开头 peek 一次累积进 mpv_frame_pending_（skip/限流
     // 也不丢），这里只读成员、不再调 video_needs_render()（二次调用会消费
     // 下一帧的旗标）。
-    // 拖动中始终沿用上一帧内容（拉伸显示）。
+    // d161：拖拽缩放中按 30fps 降帧续渲（见上），未到点沿用旧容量 FBO 内容拉伸显示。
     bool fbo_fresh = false;
-    if (allow_fbo_resize && size_changed) {
+    // d161：live_resize 中 FBO 重建与 mpv 重渲共用 30fps 时钟 —— 未到点不重建
+    //（新纹理内容为空，重建即黑帧），旧容量 FBO 内容仍有效，合成端拉伸显示；
+    if (size_changed && (!live_resize || now - last_live_video_ >= kLiveResizeVideoSec)) {
       if (!fbo_.ensure(w, h)) return;
       fbo_fresh = true;
     } else if (fbo_.fbo() == 0) {
@@ -889,7 +916,9 @@ void RenderLoop::frame(double now) {
       if (!fbo_.ensure(w, h)) return;
       fbo_fresh = true;
     }
-    const bool rerender = !live_resize && (fbo_fresh || mpv_frame_pending_);
+    const bool video_due = !live_resize || now - last_live_video_ >= kLiveResizeVideoSec;
+    const bool rerender = fbo_fresh || (mpv_frame_pending_ && video_due);
+    if (rerender && live_resize) last_live_video_ = now;
     if (rerender) {
       if (player_.software_video()) {
         // d124 软件兜底路径：mpv 在 CPU 侧出 RGBA 缓冲（不碰任何着色器），
@@ -1010,7 +1039,7 @@ void RenderLoop::frame(double now) {
   // 按压/点击不落——菜单面板叠在哪块按钮上，点菜单就不能误触底下的按钮）。
   // 拖拽进行中的除外：传 false 会让松手瞬间误判"拖完提交"，故保持原值。
   ViewInput vin = in;
-  if (ctx_open_ && !in.drag_progress && !in.drag_volume) vin.down = false;
+  if ((ctx_open_ || speed_open_) && !in.drag_progress && !in.drag_volume) vin.down = false;
 
   // —— v0.4.0 d57 修：隐藏按钮的冻结值清理（buttons_busy 恒真 → 60fps 死循环）——
   // d54 的 busy 收敛前提是"每个按钮每帧都被 button_hit 推进"；但**本帧不绘制的
@@ -1043,7 +1072,8 @@ void RenderLoop::frame(double now) {
   const bool on_center = snap.state == TransportState::PausedPlayback &&
                          center_play_hit(theme_, (float)w, (float)h, vin.mx, vin.my);
   // d45：菜单开着时压住空白处单双击语义（点菜单外的空白=只关菜单，不触发播放/暂停）
-  const bool in_stage = !ctx_open_ && !on_winbtn && !on_center && !bh.consumed;
+  const bool in_stage =
+      !ctx_open_ && !speed_open_ && !on_winbtn && !on_center && !bh.consumed;
 
   // —— d45：右键菜单条目表 + 布局（每帧重算；命中与绘制共用同一份几何）——
   CtxMenuItem ctx_items[16];
@@ -1055,19 +1085,41 @@ void RenderLoop::frame(double now) {
     auto add = [&](const char* label, CtxAction a, bool en, bool chk = false,
                    bool checked = false) { ctx_items[ctx_n++] = {label, a, en, chk, checked}; };
     add("播放 / 暂停", CtxAction::PlayPause, media);
-    add("上一个", CtxAction::Prev, media);
-    add("下一个", CtxAction::Next, media);
+    // d158：与底栏同判定 —— 无上/下一集数据（next_uri 空）时不给这两个条目
+    //（菜单每帧重建，数据到来/消失即随之增减，布局与命中同帧自洽）。
+    if (!snap.next_uri.empty()) {
+      add("上一个", CtxAction::Prev, media);
+      add("下一个", CtxAction::Next, media);
+    }
     add(nullptr, CtxAction::None, false);
-    add("全屏", CtxAction::ToggleFullscreen, true);
+    // d159：全屏项随状态改标签（全屏中 = "退出全屏"）；"退出"（关应用）只在窗口模式给，
+    // 全屏下该位置换成"停止" —— 全屏看不到标题栏关闭键，全屏菜单里放关应用项易误触。
+    add(in.fullscreen ? "退出全屏" : "全屏", CtxAction::ToggleFullscreen, true);
     add("画中画", CtxAction::Pip, true);
     add(nullptr, CtxAction::None, false);
     add("媒体信息（完整）", CtxAction::ShowMediaInfo, true, true, show_info_);
     add("投屏自动全屏", CtxAction::CastAutoFullscreen, true, true, cast_auto_fs_);
     add(nullptr, CtxAction::None, false);
-    add("退出", CtxAction::Close, true);
+    if (in.fullscreen)
+      add("停止", CtxAction::Stop, media);
+    else
+      add("退出", CtxAction::Close, true);
     ctx_lay = ctx_menu_layout(nvg_.ctx(), theme_, (float)w, (float)h, ctx_items, ctx_n,
                               ctx_anchor_x_, ctx_anchor_y_);
     ctx_hover = ctx_lay.item_at(in.mx, in.my);
+  }
+
+  // —— d169：倍速档位弹层几何（开着的帧才需要；命中与绘制共用同一份）——
+  if (speed_open_ && !snap.has_session) speed_open_ = false;  // 会话结束即收弹层
+  SpeedMenuLayout speed_lay;
+  int speed_hover = -1;
+  if (speed_open_) {
+    const DmgRect& sb = R.bar_btn[kBtnSpeed];
+    speed_lay = speed_menu_layout(nvg_.ctx(), theme_, (float)w, (float)h,
+                                  (float)sb.x + sb.w * 0.5f, (float)h - theme_.layout.botBarH);
+    speed_hover = speed_menu_item_at(speed_lay, in.mx, in.my);
+    R.speed_menu = DmgRect{(int)speed_lay.x, (int)speed_lay.y, (int)speed_lay.w,
+                           (int)speed_lay.h};
   }
 
   // 中键：音量区 = 静音切换（与点音量图标同义）
@@ -1089,6 +1141,7 @@ void RenderLoop::frame(double now) {
         case CtxAction::PlayPause: channel_.post_intent({UiIntent::Kind::PlayPause}); break;
         case CtxAction::Prev: channel_.post_intent({UiIntent::Kind::Prev}); break;
         case CtxAction::Next: channel_.post_intent({UiIntent::Kind::Next}); break;
+        case CtxAction::Stop: channel_.post_intent({UiIntent::Kind::Stop}); break;  // d159
         case CtxAction::ToggleFullscreen:
           channel_.post_intent({UiIntent::Kind::ToggleFullscreen});
           break;
@@ -1120,6 +1173,21 @@ void RenderLoop::frame(double now) {
       force_dirty_.store(true, std::memory_order_release);
     }
     ctx_lprev_ = in.down;
+  }
+
+  // —— d169：倍速弹层左键交互（标准菜单语义：同条目按下+弹起才激活；点面板外=只关）——
+  if (speed_open_) {
+    if (in.down && !speed_lprev_) {
+      speed_press_ = speed_hover;  // 按下：锁定条目（弹层外 -1）
+    } else if (!in.down && speed_lprev_) {
+      if (speed_press_ >= 0 && speed_hover == speed_press_) {
+        const double spd = speed_preset(speed_press_);
+        channel_.post_intent({UiIntent::Kind::Speed, spd, false});
+      }
+      speed_open_ = false;  // 任何左键弹起都收弹层
+      force_dirty_.store(true, std::memory_order_release);
+    }
+    speed_lprev_ = in.down;
   }
 
   // —— 画面贴图（圆角内落地，四角保持透明）——
@@ -1169,6 +1237,15 @@ void RenderLoop::frame(double now) {
 
   // —— UI 叠加 ——
   ViewCallbacks cb = make_intent_callbacks(channel_);
+  // d169：倍速按钮点击 → 切换档位弹层（纯渲染线程本地状态，不绕主线程；与右键菜单互斥）
+  cb.on_speed = [this] {
+    speed_open_ = !speed_open_;
+    if (speed_open_) ctx_open_ = false;
+    speed_press_ = -1;
+    speed_lprev_ = false;
+    force_dirty_.store(true, std::memory_order_release);
+    wake();
+  };
   if (pip_mode_) {
     // 画中画：有画面时只有画面；待机态给小窗专用缩小版内容（底色 + 设备名 + 等待投屏）
     if (!have_src)
@@ -1396,6 +1473,10 @@ void RenderLoop::frame(double now) {
     }
   }
 
+  // —— d169：倍速档位弹层（在剪贴板提示条之上、右键菜单之下）——
+  if (!pip_mode_ && speed_open_)
+    draw_speed_menu(nvg_.ctx(), theme_, speed_lay, snap.speed, speed_hover, clip);
+
   // —— d45：右键菜单（全栈最顶层：盖过视图与徽章）——
   if (!pip_mode_ && ctx_open_)
     draw_ctx_menu(nvg_.ctx(), theme_, ctx_lay, ctx_items, ctx_n, ctx_hover, clip);
@@ -1507,6 +1588,7 @@ ViewCallbacks make_intent_callbacks(ViewStateChannel& ch) {
   cb.on_play_pause = [&ch] { ch.post_intent({UiIntent::Kind::PlayPause}); };
   cb.on_prev = [&ch] { ch.post_intent({UiIntent::Kind::Prev}); };
   cb.on_next = [&ch] { ch.post_intent({UiIntent::Kind::Next}); };
+  cb.on_stop = [&ch] { ch.post_intent({UiIntent::Kind::Stop}); };  // d158：停止键
   cb.on_seek = [&ch](double sec) { ch.post_intent({UiIntent::Kind::Seek, sec, false}); };
   cb.on_volume = [&ch](float v) { ch.post_intent({UiIntent::Kind::Volume, v, false}); };
   cb.on_mute = [&ch](bool m) { ch.post_intent({UiIntent::Kind::Mute, 0, m}); };

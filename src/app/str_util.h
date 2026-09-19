@@ -17,6 +17,9 @@ std::string format_hms_seconds(double sec);
 std::string format_hms_padded(double sec);
 
 // 去掉 URI 的 #t=... 片段（重复 URI 判定按 base 比较）
+// 倍速 -> 显示标签（d169）：0.5->"0.5x"、0.75->"0.75x"、1.0->"1.0x"、1.25->"1.25x"
+std::string format_speed(double s);
+
 std::string uri_without_fragment(const std::string& uri);
 
 // 提取 #t=xx / #t=hh:mm:ss 片段秒数；无片段返回 -1

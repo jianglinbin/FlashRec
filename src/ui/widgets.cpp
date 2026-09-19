@@ -234,6 +234,24 @@ float round_btn_bg(NVGcontext* vg, const Theme& t, float cx, float cy, float d,
   return btn_bg(vg, t, cx, cy, d, t.layout.btnBoxW, st);
 }
 
+float pill_btn_bg(NVGcontext* vg, const Theme& t, float cx, float cy, float w, float h,
+                  const BtnState& st) {
+  const float k = 1.f - (1.f - t.layout.btnPressScale) * st.press;
+  const float bw = w * k, bh = h * k;
+  const float r = t.layout.btnRadius * k;
+  if (st.hover > 0.004f) {
+    NVGcolor c = t.btnHoverBg;
+    c.a *= st.hover;
+    rounded_rect(vg, cx - bw * 0.5f, cy - bh * 0.5f, bw, bh, r, c);
+  }
+  if (st.press > 0.004f) {
+    NVGcolor c = t.btnPressBg;
+    c.a *= st.press;
+    rounded_rect(vg, cx - bw * 0.5f, cy - bh * 0.5f, bw, bh, r, c);
+  }
+  return k;
+}
+
 NVGcolor btn_icon_color(const Theme& t, const BtnState& st) {
   if (!st.enabled) return t.iconDisabled;
   return nvgLerpRGBA(t.iconDim, t.icon, st.hover);
@@ -353,6 +371,13 @@ void icon_pause(NVGcontext* vg, float cx, float cy, float h, NVGcolor c) {
   nvgFill(vg);
   nvgBeginPath(vg);
   nvgRect(vg, cx + w * 0.5f - w * 0.34f, cy - h * 0.5f, w * 0.34f, h);
+  nvgFill(vg);
+}
+
+void icon_stop(NVGcontext* vg, float cx, float cy, float w, NVGcolor c) {
+  nvgFillColor(vg, c);
+  nvgBeginPath(vg);  // 实心方块（w 的 0.78，与播放/暂停键视觉体量一致）
+  nvgRect(vg, cx - w * 0.39f, cy - w * 0.39f, w * 0.78f, w * 0.78f);
   nvgFill(vg);
 }
 

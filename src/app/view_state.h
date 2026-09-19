@@ -55,9 +55,10 @@ static_assert(std::is_trivially_copyable<ViewInput>::value,
 // 只表达意图（要做什么），不含状态 —— 状态的唯一真值仍在主线程。
 struct UiIntent {
   enum class Kind {
-    PlayPause, Prev, Next, ToggleFullscreen, ToggleMaximize, Minimize, Close, Pip,
+    PlayPause, Prev, Next, Stop, ToggleFullscreen, ToggleMaximize, Minimize, Close, Pip,
     Seek, Volume, Mute, Preview, DismissMenu, DragMove, ClipboardPlay, ClipboardDismiss,
     UiPrefChanged,  // R1：右键菜单勾选项变化 → 主线程落盘 settings.json
+    Speed,          // d169：倍速选择（value = 倍速；主线程落盘 + 下发给播放器）
   };
   // R1：可持久化 UI 偏好 id（UiPrefChanged 的 pref 载荷；与 settings.json 键一一对应）
   enum class UiPref { ShowInfo = 1, CastAutoFullscreen };

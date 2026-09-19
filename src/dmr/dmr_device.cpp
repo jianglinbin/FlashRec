@@ -205,6 +205,8 @@ void DmrDevice::tick() {
       case PlayerEvent::Kind::StateChanged: gena_.state_changed(e.snap); break;
       case PlayerEvent::Kind::MediaInfo: gena_.media_changed(e.snap); break;
       case PlayerEvent::Kind::Volume: gena_.volume_changed(e.snap); break;
+      // d169：倍速非 AVT 事件变量（SOAP 无对应状态），只更新快照供 UI 显示
+      case PlayerEvent::Kind::Speed: break;
       case PlayerEvent::Kind::Position: break;  // 位置不进事件：App 只轮询 GetPositionInfo
     }
   }

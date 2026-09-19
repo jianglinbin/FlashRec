@@ -13,7 +13,10 @@ if (NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-option(FLASHREC_CONSOLE "保留控制台（开发期看日志；发布关闭）" ON)
+# 控制台子系统开关（仅开发期用：强制常驻控制台窗口）。
+# 默认 OFF = Windows 子系统（双击不弹控制台），运行时用 `flashrec --console` 显示控制台；
+# UTF-8 代码页由 src/platform/console.cpp 在控制台存在时统一设置（消除中文乱码）。
+option(FLASHREC_CONSOLE "控制台子系统（开发期常驻控制台；默认关闭，运行时 --console）" OFF)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(deps)
@@ -41,6 +44,7 @@ set(FR_SOURCES
   src/ui/views/empty_state.cpp
   src/ui/views/player_view.cpp
   src/platform/gl_lock.cpp
+  src/platform/console.cpp     # d163：运行时可申请控制台（--console）+ UTF-8 代码页
   src/platform/seh_guard.cpp   # d125：SEH 兜底（渲染链接住显卡驱动异常 → 自动降级 SW）
   src/platform/crash_dump.cpp
   src/platform/interaction.cpp

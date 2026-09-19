@@ -157,7 +157,7 @@ static void test_subnet_match(void) {
                 "location: http://192.0.2.1/x.xml\r\n",
                 "头名大小写不敏感，且不改动原大小写");
 
-  check_rewrite("LOCATION: http://198.51.100.5/d.xml\r\n", "192.0.2.1",
+  check_rewrite("LOCATION: http://10.0.0.5/d.xml\r\n", "192.0.2.1",
                 "LOCATION: http://192.0.2.1/d.xml\r\n",
                 "无端口形式：主机段到 '/' 结束");
 
@@ -220,13 +220,13 @@ static void test_doc_localize(void) {
   check(fr_net_if_doc_take(&len) == NULL, "take() 之后槽位已清空");
 
   // ② Host 不带端口：必须保留原 authority 的端口（d112 教训，否则按 80 发 SOAP）
-  len = fr_net_if_doc_localize(kDoc, sizeof(kDoc) - 1, "198.51.100.5", 8);
+  len = fr_net_if_doc_localize(kDoc, sizeof(kDoc) - 1, "10.0.0.5", 8);
   check(len > 0, "Host 不带端口时仍应重写");
   got = fr_net_if_doc_take(&len);
   check_str(got,
             "<?xml version=\"1.0\"?>\r\n"
             "<root>\r\n"
-            "<URLBase>http://198.51.100.5:49152/</URLBase>\r\n"
+            "<URLBase>http://10.0.0.5:49152/</URLBase>\r\n"
             "<controlURL>/fr/control/AVTransport</controlURL>\r\n"
             "</root>\r\n",
             "Host 不带端口时保留原端口");
@@ -238,7 +238,7 @@ static void test_doc_localize(void) {
   check(fr_net_if_doc_take(&len) == NULL, "返回 0 时槽位必须为空");
 
   // ④ 变长替换：长 -> 短 与 短 -> 长
-  len = fr_net_if_doc_localize(kDoc, sizeof(kDoc) - 1, "198.51.100.5:49152", 14);
+  len = fr_net_if_doc_localize(kDoc, sizeof(kDoc) - 1, "10.0.0.5:49152", 14);
   got = fr_net_if_doc_take(&len);
   check(len == sizeof(kDoc) - 1 - 4, "长 -> 短：长度差 = 主机段差");
   free(got);
@@ -252,12 +252,12 @@ static void test_doc_localize(void) {
 
   // ⑥ IPv6 字面量 / 无 URLBase / 非法入参
   static const char kDoc6[] = "<URLBase>http://[fe80::1]:49152/</URLBase>";
-  check(fr_net_if_doc_localize(kDoc6, sizeof(kDoc6) - 1, "198.51.100.5", 8) == 0,
+  check(fr_net_if_doc_localize(kDoc6, sizeof(kDoc6) - 1, "10.0.0.5", 8) == 0,
         "URLBase 是 IPv6 字面量 → 不动（本模块只管 IPv4）");
   static const char kDocNoBase[] = "<root><friendlyName>x</friendlyName></root>";
-  check(fr_net_if_doc_localize(kDocNoBase, sizeof(kDocNoBase) - 1, "198.51.100.5", 8) == 0,
+  check(fr_net_if_doc_localize(kDocNoBase, sizeof(kDocNoBase) - 1, "10.0.0.5", 8) == 0,
         "文档里没有 URLBase → 不动");
-  check(fr_net_if_doc_localize(NULL, 0, "198.51.100.5", 8) == 0, "NULL 文档 → 0");
+  check(fr_net_if_doc_localize(NULL, 0, "10.0.0.5", 8) == 0, "NULL 文档 → 0");
   check(fr_net_if_doc_localize(kDoc, sizeof(kDoc) - 1, NULL, 0) == 0, "NULL Host → 0");
   check(fr_net_if_doc_take(&len) == NULL, "异常路径后槽位保持为空");
 }

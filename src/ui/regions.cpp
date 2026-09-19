@@ -44,6 +44,7 @@ Geom geom_of(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSna
   g.btnPrevX = x;
   x += L.btnPitch;
   g.btnNextX = x;
+  g.btnStopX = (g.btnPrevX + g.btnNextX) * 0.5f;  // d158：两键中点
   x += L.btnHit * 0.5f + L.botBarGap;
   g.timeCurX = x;
   x += curW + L.botBarGap;
@@ -60,6 +61,9 @@ Geom geom_of(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSna
   x -= g.volW + L.botBarGap;
   g.volIconX = x - L.btnHit * 0.5f;
   x -= L.btnHit + L.botBarGap;
+  // d169：倍速按钮 —— 倒计时（timeLeft）之后、静音键之前
+  g.speedX = x - L.speedW * 0.5f;
+  x -= L.speedW + L.botBarGap;
   g.timeLeftX = x - leftW;
   g.trackW = std::max(40.f, g.timeLeftX - L.botBarGap - g.trackX);
   return g;
@@ -161,7 +165,11 @@ UiRegions compute_regions(NVGcontext* vg, const Theme& t, float w, float h,
   R.bar_btn[kBtnPlay] = DmgRect{dm(g.btnPlayX - hs), dm(y0), dm(L.btnHit), dm(bh)};
   R.bar_btn[kBtnPrev] = DmgRect{dm(g.btnPrevX - hs), dm(y0), dm(L.btnHit), dm(bh)};
   R.bar_btn[kBtnNext] = DmgRect{dm(g.btnNextX - hs), dm(y0), dm(L.btnHit), dm(bh)};
+  R.bar_btn[kBtnStop] = DmgRect{dm(g.btnStopX - hs), dm(y0), dm(L.btnHit), dm(bh)};
   R.bar_btn[kBtnMute] = DmgRect{dm(g.volIconX - hs), dm(y0), dm(L.btnHit), dm(bh)};
+  // d169：倍速按钮热区（宽 = speedW，与 bar_hit 同式）
+  R.bar_btn[kBtnSpeed] =
+      DmgRect{dm(g.speedX - L.speedW * 0.5f), dm(y0), dm(L.speedW), dm(bh)};
   R.bar_btn[kBtnPip] = DmgRect{dm(g.pipX - hs), dm(y0), dm(L.btnHit), dm(bh)};
   R.bar_btn[kBtnFullscreen] = DmgRect{dm(g.fsX - hs), dm(y0), dm(L.btnHit), dm(bh)};
   R.bar_btn[kBtnWinMin] = R.win_btn[0];

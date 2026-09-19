@@ -31,6 +31,7 @@
 #include "dmr/dmr_device.h"
 #include "platform/net_if.h"   // 多网卡（d110）：启动打印候选接口
 #include "platform/clipboard.h"
+#include "platform/console.h"  // 运行时控制台（--console）+ UTF-8（d163）
 #include "platform/keep_awake.h"
 #include "platform/paths.h"
 #include "platform/crash_dump.h"
@@ -214,12 +215,24 @@ void save_window_geometry(Config& cfg, WindowGLFW& w, const std::string& path) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  // 控制台策略（d163）：默认无控制台（GUI 子系统）；带 `--console` 才申请一个。
+  // 必须在 init_logger 之前，控制台 sink 才能在构造时拿到有效句柄。
+  bool want_console = false;
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--console") == 0 || std::strcmp(argv[i], "-c") == 0) {
+      want_console = true;
+    }
+  }
+  bool have_console = want_console ? console_open() : console_available();
+  if (have_console && !want_console) console_set_utf8();
+
   paths::init();
   crash_dump::install(paths::log_dir());  // 未处理异常 → minidump（事后定位崩溃模块）
   Config cfg = Config::load(paths::config_file());
-  init_logger(paths::log_dir(), cfg.log_level);
-  FR_LOG_INFO("[APP] FlashRec 启动 v{}", FLASHREC_VERSION);
+  init_logger(paths::log_dir(), cfg.log_level, have_console);
+  FR_LOG_INFO("[APP] FlashRec 启动 v{}（控制台={}）", FLASHREC_VERSION,
+              have_console ? "on" : "off");
 
   // d22：pupnp 全量请求入口日志（miniserver.c 的 fr_http_trace 补丁读此变量）。
   // 默认关闭（settings.json 加 "log.http_entry": true 才开）——每个请求一次
@@ -291,6 +304,31 @@ int main() {
   PlayerController player(bus, cfg);
   if (!player.init()) {
     FR_LOG_ERROR("[APP] mpv 初始化失败（继续运行，投屏不可用）");
+  }
+  // d163：恢复持久化的音量/静音 —— 上次调好的音量跨重启保留。bilibili 投屏开始
+  // 在 Play 后 ~1.5s 才推 SetVolume，恢复缺位的窗口期就是"默认 100 最响很炸"的那段。
+  if (cfg.player_volume != 100 || cfg.player_muted) {
+    DmrCommand vc;
+    vc.type = DmrCommand::Type::SetVolume;
+    vc.volume = cfg.player_volume;
+    player.on_command(vc);  // req#0：本地恢复（与 UI 操作同口径）
+    if (cfg.player_muted) {
+      DmrCommand mc;
+      mc.type = DmrCommand::Type::SetMute;
+      mc.mute = true;
+      player.on_command(mc);
+    }
+    FR_LOG_INFO("[APP] 音量恢复 {}{}（settings.json: player.*）", cfg.player_volume,
+                cfg.player_muted ? " 静音" : "");
+  }
+  // d169：恢复持久化的倍速（player.speed）。mpv speed 是全局属性，启动设一次即
+  // 对后续所有 loadfile 生效（含后端降级重载），无需在文件加载后再补。
+  if (cfg.player_speed != 1.0) {
+    DmrCommand sc;
+    sc.type = DmrCommand::Type::SetSpeed;
+    sc.speed = cfg.player_speed;
+    player.on_command(sc);
+    FR_LOG_INFO("[APP] 倍速恢复 {}x（settings.json: player.speed）", cfg.player_speed);
   }
   DmrDevice dmr(bus, cfg);
   // —— 多网卡（v0.5.0 / d110）：把参与 SSDP/HTTP 的候选接口全列出来 ——
@@ -450,8 +488,6 @@ int main() {
       drag_px0 = in.mx + wx; drag_py0 = in.my + wy;
     }
     drag_wx0 = wx; drag_wy0 = wy; drag_ww0 = ww; drag_wh0 = wh;
-    fprintf(stderr, "[DBG-DRAG] start_move global=%d gx=%d gy=%d wx=%d wy=%d\n",
-            (int)drag_global, drag_gx0, drag_gy0, wx, wy);
   };
   auto win_drag_start_resize = [&](WindowGLFW::WinEdge e) {
     win_resize_drag = true;
@@ -522,8 +558,6 @@ int main() {
         cursor_phys(x, y, &px, &py);
       }
       window.set_pos(drag_wx0 + px - int(drag_px0), drag_wy0 + py - int(drag_py0));
-      fprintf(stderr, "[DBG-DRAG] follow px=%d py=%d -> %d,%d\n", px, py,
-              drag_wx0 + px - int(drag_px0), drag_wy0 + py - int(drag_py0));
       publish_wake();
       return;
     }
@@ -840,7 +874,6 @@ int main() {
         break;
       case UiIntent::Kind::DragMove: {
         // d68 §2：拖动指令统一入口，消费与否按区域决定。目前唯一消费者 = TopBar。
-        fprintf(stderr, "[DBG-DRAG] intent region=%d\n", (int)it.region);
         if (it.region != UiIntent::DragRegion::TopBar) break;  // Stage/Widget：已识别，无动作
         // 边缘缩放带（N 带与顶栏重叠）已接管本次按住 → 不能再启动移动拖拽
         if (win_move_drag || win_resize_drag) break;
@@ -938,6 +971,15 @@ int main() {
         }
         break;
       }
+      case UiIntent::Kind::Stop: {
+        // d158：停止键（无上/下一集数据时替换 prev/next 两键）——与 DMR 层 Stop action
+        // 同语义：走 handle_stop（暂停 + STOPPED + 保持期）；无会话时按钮本就禁用。
+        DmrCommand c;
+        c.type = DmrCommand::Type::Stop;
+        player.on_command(c);
+        show_osd(3, 7);  // d32 动作反馈：7 = 停止
+        break;
+      }
       case UiIntent::Kind::Seek: {
         const PlaybackSnapshot s = bus.snapshot();
         DmrCommand c;
@@ -960,6 +1002,21 @@ int main() {
         c.type = DmrCommand::Type::SetMute;
         c.mute = it.flag;
         player.on_command(c);
+        break;
+      }
+      case UiIntent::Kind::Speed: {
+        // d169：倍速选择 —— 落盘 player.speed、下发播放器、OSD 反馈。
+        cfg.player_speed = it.value;
+        {
+          char raw[16];
+          std::snprintf(raw, sizeof(raw), "%g", it.value);
+          Config::patch(paths::config_file(), {{"player", "speed", raw}});
+        }
+        DmrCommand c;
+        c.type = DmrCommand::Type::SetSpeed;
+        c.speed = it.value;
+        player.on_command(c);
+        show_osd(4, it.value);  // d169：倍速反馈面板（kind4）
         break;
       }
       case UiIntent::Kind::Preview: {
@@ -1206,6 +1263,11 @@ int main() {
   int geo_x = 0, geo_y = 0, geo_w = 0, geo_h = 0;
   bool geo_fs = false, geo_mx = false, geo_valid = false, geo_dirty = false;
   double geo_settle_at = 0;
+  // d163：音量/静音去抖持久化（同 P5 口径：变化后静止 800ms 才落盘）
+  int vol_last = cfg.player_volume;
+  bool mute_last = cfg.player_muted;
+  bool vol_dirty = false;
+  double vol_settle_at = 0;
   while (!window.should_close()) {
     const double now = mono_now();
     in.now = now;  // 无输入也推进（idle 淡出用）
@@ -1328,6 +1390,23 @@ int main() {
       }
     }
 
+    // 7.6) d163：音量/静音变化检测 + 去抖落盘（音量条拖动每秒几十个 SetVolume，
+    //      静止 800ms 写一次；Config::patch 键不变不写盘）
+    if (snap.volume != vol_last || snap.muted != mute_last) {
+      vol_last = snap.volume;
+      mute_last = snap.muted;
+      vol_dirty = true;
+      vol_settle_at = now + 0.8;
+    } else if (vol_dirty && now >= vol_settle_at) {
+      vol_dirty = false;
+      cfg.player_volume = vol_last;
+      cfg.player_muted = mute_last;
+      Config::patch(paths::config_file(),
+                    {{"player", "volume", std::to_string(vol_last)},
+                     {"player", "muted", mute_last ? "true" : "false"}});
+      FR_LOG_INFO("[APP] 音量 = {}{}（已落盘）", vol_last, mute_last ? " 静音" : "");
+    }
+
     // 8) 发布输入给渲染线程 —— d47 改按需：渲染线程每帧自算 in.now/dt/fullscreen/
     //    maximized/win_radius/窗口尺寸，主线程循环里唯一会变的是 `in`（所有改动点
     //    已各自 publish_wake）与播放快照（tick 推进，版本号检测）。静默期零发布
@@ -1364,6 +1443,12 @@ int main() {
   // d146 P5：退出兜底 —— 几何再落盘一次（去抖可能还没到点）
   if (geo_valid && window.monitor_index_of_window() >= 0)
     save_window_geometry(cfg, window, paths::config_file());
+  // d163：音量/静音兜底再落盘一次（去抖可能还没到点）
+  if (vol_dirty) {
+    Config::patch(paths::config_file(),
+                  {{"player", "volume", std::to_string(vol_last)},
+                   {"player", "muted", mute_last ? "true" : "false"}});
+  }
   // 顺序关键：先停渲染线程（释放 GL 资源、交还上下文），再动窗口/播放器。
   render.stop();
   thumb.shutdown();  // 渲染线程已停，不再读结果槽；先停 worker 再销毁 mpv

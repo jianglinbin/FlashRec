@@ -343,6 +343,13 @@ void MpvBridge::set_mute(bool m) {
   mpv_set_property(mpv_, "mute", MPV_FORMAT_FLAG, &v);
 }
 
+void MpvBridge::set_speed(double s) {
+  if (!mpv_) return;
+  if (s < 0.25) s = 0.25;
+  if (s > 4.0) s = 4.0;
+  mpv_set_property(mpv_, "speed", MPV_FORMAT_DOUBLE, &s);
+}
+
 double MpvBridge::get_time_pos() {
   if (!mpv_) return 0;
   double v = 0;

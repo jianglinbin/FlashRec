@@ -15,6 +15,7 @@ C++20 + 自绘 UI（nanovg / GLFW），Windows 与 Linux 一等公民。
   （设备保持在线），真正退出走托盘菜单。
 - **播放**：libmpv 后端，硬解优先；老显卡 / 驱动的 GL 渲染链不可用时自动降级到软件渲染。
 - **投屏呈现**：多屏可选、按屏记忆、自动全屏。
+- **倍速播放**：控制栏 0.5x–3.0x 七档选择（点击弹出列表），记住上次档位。
 
 ## 构建
 
@@ -37,8 +38,9 @@ cmake --preset linux-gcc && cmake --build build    # Linux（GCC/Clang + Ninja�
   的绝对路径），按你的 VS 安装位置改一次即可。
 - **Linux**：需 `cmake ninja-build`；要打 AppImage 还得有 `patchelf`。
 
-开发期构建默认带控制台窗口（`FLASHREC_CONSOLE=ON`），方便看日志；发布构建请关掉它
-（打包脚本已处理）。
+默认构建为无控制台窗口（Windows GUI 子系统）；需要看日志时用 `flashrec --console`
+启动，或配置 `-DFLASHREC_CONSOLE=ON` 构建一个带控制台的版本。控制台按 UTF-8 输出，
+中文日志不再乱码。
 
 ## 打包
 

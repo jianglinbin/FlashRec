@@ -84,6 +84,14 @@
    "knobSizeHover": 15,
    "hitPad": 8
   },
+  "speedControl": {
+   "note": "d169：底栏倍速按钮（置于倒计时之后、静音之前，文字 pill 显示当前倍速），点击向上弹出档位列表",
+   "fontSize": 11,
+   "buttonWidth": 40,
+   "itemHeight": 24,
+   "menuPadY": 5,
+   "presets": [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
+  },
   "timeText": {
    "fontSize": 11,
    "fontVariantNumeric": "tabular-nums"

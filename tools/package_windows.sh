@@ -20,11 +20,11 @@
 #       （命名与 Linux 侧对齐：flashrec_<ver>_amd64.deb / FlashRec-<ver>-x86_64.AppImage）
 #
 # 为什么单独一个构建目录 build-rel，而不复用开发用的 build/：
-#   发布构建必须 -DFLASHREC_CONSOLE=OFF —— 见 CMakeLists.txt:67，该开关决定
-#   add_executable(flashrec WIN32 ...) 还是普通控制台程序；默认 ON 是给开发期看日志用的，
-#   拿它发布用户双击会先弹一个黑窗口。而 build/ 就是那个 ON 的开发构建。同一个目录换
-#   cache 变量会触发全量重配并把开发构建也变成"无控制台"（日志就没了），所以分开。
-#   附带好处：不必先关掉正在跑的实例 —— 输出路径不同，不会撞 LNK1104。
+#   FLASHREC_CONSOLE 已默认 OFF（见 CMakeLists.txt），build/ 与 build-rel 都是 Windows
+#   GUI 子系统（双击不弹控制台）；运行时用 `flashrec --console` 才显示控制台。
+#   仍分目录的理由：① 发布与开发构建隔离，避免 dev 调试开关/产物混入；
+#   ② 不必先关掉正在跑的实例 —— 输出路径不同，不会撞 LNK1104。
+#   脚本仍显式传 -DFLASHREC_CONSOLE=OFF，作为"发布必须无控制台"的冗余保险。
 #
 # 为什么打包文件清单用 cmake --install，而不是手工 cp 三样：
 #   CMakeLists.txt 的 WIN32 分支已声明便携布局（exe + libmpv-2.dll + assets/），
@@ -234,8 +234,8 @@ else
   warn "找不到 VC++ redist 目录，跳过运行库 —— 目标机若没装 VC++ 2015-2022 运行库会起不来"
 fi
 
-# 关键检查：子系统必须是 Windows GUI。CUI 意味着用户双击会先弹控制台窗口 ——
-# 这正是 FLASHREC_CONSOLE 默认 ON 会带来的问题，所以这里必须实测，不能只看构建参数。
+# 关键检查：子系统必须是 Windows GUI。CUI 意味着用户双击会先弹控制台窗口。
+# FLASHREC_CONSOLE 现默认 OFF，这里仍实测，防止有人把它打开后发布（不能只看参数）。
 log "自检 2/2：PE 子系统"
 DUMPBIN="$FR_MSVC/bin/Hostx64/x64/dumpbin.exe"
 if [ -x "$DUMPBIN" ]; then

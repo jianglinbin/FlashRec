@@ -22,6 +22,8 @@ enum BtnId : int {
   kBtnPlay = 0,
   kBtnPrev,
   kBtnNext,
+  kBtnStop,        // d158：无上/下一集数据时替换上一集/下一集两键（位置 = 两键中点）
+  kBtnSpeed,       // d169：倍速键（倒计时之后、静音之前）
   kBtnMute,        // 音量图标 = 静音键
   kBtnPip,
   kBtnFullscreen,
@@ -39,15 +41,19 @@ enum BtnId : int {
 // 空 media 会话下媒体类控件不算占用，见实现说明。
 struct BarHit {
   bool play = false, prev = false, next = false;
+  bool stop = false;    // d158：与 prev/next 互斥（无上/下一集数据时才有效）
   bool track = false;   // 进度条条身（不含时间文字）
   bool time = false;    // 时间文字区
   bool mute = false, vol = false;
+  bool speed = false;  // d169：倍速按钮（媒体类：无会话禁用）
   bool pip = false, fs = false;
   // 进度条几何（绘制与渲染线程算悬停百分比共用同一份，禁止两处各算）
   float track_x = 0, track_w = 0;
   // 点击是否已被底栏消费（= 上面任一位，或与媒体无关的栏内位置）
   bool consumed = false;
-  bool any() const { return play || prev || next || time || track || mute || vol || pip || fs; }
+  bool any() const {
+    return play || prev || next || stop || time || track || mute || vol || speed || pip || fs;
+  }
 };
 
 // 底栏控件命中查询（几何唯一来源：绘制、命中、可见度、空白处判定全部走这里）。
@@ -96,7 +102,7 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
 // 独立于 ButtonFx/BtnId：菜单条目命中用自管下标，不占用按钮槽
 //（kMax=16 已被 10 个 BtnId 占用，菜单再挂进去就爆了）。
 enum class CtxAction {
-  None, PlayPause, Prev, Next, ToggleFullscreen, Pip,
+  None, PlayPause, Prev, Next, Stop, ToggleFullscreen, Pip,
   // d146 R5：三项信息徽章合并为一项；R2：新增投屏自动全屏（两项均勾选 + R1 持久化）。
   // 旧 ShowInfo/ShowVideoFps/ShowUiFps 已废弃（台账记"已废弃"，编号不删）。
   ShowMediaInfo, CastAutoFullscreen, Close,
@@ -129,6 +135,25 @@ CtxMenuLayout ctx_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float
 void draw_ctx_menu(NVGcontext* vg, const Theme& t, const CtxMenuLayout& lay,
                    const CtxMenuItem* items, int n, int hover,
                    const DmgRect* clip = nullptr);
+
+// —— d169 倍速档位弹层（底栏倍速按钮上方；绘制/命中共用同一份几何）——
+// 档位唯一真值：按钮标签 / 弹层条目 / 激活取值共用，禁止散落。
+constexpr int kSpeedPresetCount = 7;
+double speed_preset(int index);      // 越界返回 1.0
+int speed_preset_nearest(double s);  // 与当前倍速最接近的档位下标（打勾用）
+
+struct SpeedMenuLayout {
+  float x = 0, y = 0, w = 0, h = 0;
+  float item_h = 0;
+  float ys[kSpeedPresetCount] = {};
+  int count = 0;
+};
+// anchor_cx = 倍速按钮中心 x；bot_y = 底栏顶边（弹层贴其上方，横向居中并夹进窗口）
+SpeedMenuLayout speed_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float win_h,
+                                  float anchor_cx, float bot_y);
+int speed_menu_item_at(const SpeedMenuLayout& lay, float px, float py);  // -1 = 无
+void draw_speed_menu(NVGcontext* vg, const Theme& t, const SpeedMenuLayout& lay,
+                     double cur_speed, int hover, const DmgRect* clip = nullptr);
 
 }  // namespace fr
 

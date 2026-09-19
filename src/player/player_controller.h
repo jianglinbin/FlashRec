@@ -67,6 +67,7 @@ class PlayerController {
   void handle_seek(const DmrCommand& c, double now);
   void handle_volume(const DmrCommand& c, double now);
   void handle_mute(const DmrCommand& c, double now);
+  void handle_speed(const DmrCommand& c, double now);  // d169
   void handle_preset(const DmrCommand& c, double now);
 
   // —— mpv 事件 → 转移 ——
@@ -81,6 +82,7 @@ class PlayerController {
   void publish_position(bool force);
   void publish_media();
   void publish_volume();
+  void publish_speed();  // d169
 
   double calibrate_target(const DmrCommand& c) const;  // R1 重复 URI 进度校准
 

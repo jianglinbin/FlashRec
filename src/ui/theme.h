@@ -113,6 +113,11 @@ struct Theme {
     float volKnob = 11;       // 滑块直径
     float volKnobHover = 15;  // 悬停/拖拽时滑块直径
     float volHitPad = 8;      // 热区在条两端外扩（滑块半径占位，避免端点难抓）
+    // 倍速（d169）：底栏文字按钮 + 向上弹出的档位列表
+    float speedFont = 11;     // 按钮/列表文字字号
+    float speedW = 40;        // 倍速按钮宽（pill；高用 btnBoxW）
+    float speedItemH = 24;    // 弹出列表条目高
+    float speedMenuPadY = 5;  // 弹出列表上下内边距
     // 动效
     double idleHideSec = 2.5;   // 无操作隐去（d25：用户定 2.5s）
     double fadeSec = 0.3;       // 淡入淡出
@@ -134,6 +139,8 @@ struct Theme {
     float osdBarThick = 4;     // 竖向音量条粗
     float osdBarLen = 70;      // 竖向音量条长（d31：88 会顶到百分比文字，缩短留出间距）
     float osdSeekH = 56;       // 进度/动作 OSD 面板（横向）高；宽度按内容自适应（d32 删固定宽）
+    float osdMaxHRatio = 0.2f; // d160：横向面板高占窗口高的上限比 —— 小窗口整体等比收缩
+                               //   （含图标/字号/间距），大窗口恒原生高；音量竖面板不参与
     float osdFont = 12;        // OSD 文字字号
     float miniLineH = 2;         // 常驻迷你进度线高（d37 用户定值：贴底、收窄、不消失、不显眼）
     float miniLineMaxAlpha = 0.85f;  // 迷你线最大不透明度（低调）

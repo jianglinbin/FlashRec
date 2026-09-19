@@ -30,8 +30,8 @@ wait
 
 # glad：GL 3.3 核心加载器（pip 装生成器后离线生成，走清华镜像）
 if [ ! -f "third_party/glad/include/glad/gl.h" ]; then
-  PY_MGR="/c/Users/ben/.workbuddy/binaries/python/versions/3.13.12/python.exe"
-  VENV="/c/Users/ben/.workbuddy/binaries/python/envs/default"
+  PY_MGR="/c/Users/<user>/.workbuddy/binaries/python/versions/3.13.12/python.exe"
+  VENV="/c/Users/<user>/.workbuddy/binaries/python/envs/default"
   if [ ! -x "$VENV/Scripts/python.exe" ]; then
     "$PY_MGR" -m venv "$VENV" >>"$LOG" 2>&1
   fi
@@ -47,7 +47,7 @@ else
 fi
 
 # mpv-dev（libmpv 预编译开发包，含 import lib 与 dll）
-"C:/Users/ben/.workbuddy/binaries/python/versions/3.13.12/python.exe" tools/fetch_mpv.py >>"$LOG" 2>&1 \
+"C:/Users/<user>/.workbuddy/binaries/python/versions/3.13.12/python.exe" tools/fetch_mpv.py >>"$LOG" 2>&1 \
   && echo "[ok] mpv-dev" | tee -a "$LOG" || echo "[FAIL] mpv-dev（详见 third_party/_fetch.log）" | tee -a "$LOG"
 
 echo "done" | tee -a "$LOG"

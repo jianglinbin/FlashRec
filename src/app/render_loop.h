@@ -204,6 +204,10 @@ class RenderLoop {
   int ctx_press_ = -1;               // 左键按住的条目下标（-1 = 无/菜单外）
   bool ctx_lprev_ = false;           // 菜单开时的左键上一帧状态
   bool right_prev_ = false;          // 右键上一帧状态（边沿检测）
+  // —— d169 倍速档位弹层（渲染线程自有，跨帧靠成员本身；不进 render_state 槽）——
+  bool speed_open_ = false;          // 弹层开着
+  int speed_press_ = -1;             // 左键按住的条目下标（-1 = 无/弹层外）
+  bool speed_lprev_ = false;         // 弹层开时的左键上一帧状态
   bool ctx_right_suppress_ = false;  // 菜单开时再按右键=关闭；该次弹起不得重开菜单
   float right_x_ = 0, right_y_ = 0;  // 右键按下位置（6px 防抖基准）
   bool show_info_ = false;           // d146：三合一徽章总开关（唯一菜单勾选项；持久化经 UiPrefChanged）
@@ -234,6 +238,8 @@ class RenderLoop {
   BadgeQ badge_q_drawn_{};  // 上次实际画出的徽章内容（逐字段 eq = 无需重绘）
   // —— v0.4.0 d63 动画限帧 ——
   double last_anim_draw_ = 0;     // 上次纯动画类出帧时刻（30fps 闸门基准）
+  // —— d161 拖拽缩放视频降帧 ——
+  double last_live_video_ = 0;    // 上次 live_resize 中 mpv 全管线出帧时刻（30fps 闸门基准）
 
   // —— d47 自适应等待 ——
   // 下一轮 wait_wake 的时长：出帧后 8ms（动画/播放逐帧推进），跳帧后 60ms

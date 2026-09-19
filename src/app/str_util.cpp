@@ -56,6 +56,17 @@ std::string format_hms_padded(double sec) {
   return buf;
 }
 
+std::string format_speed(double s) {
+  char buf[16];
+  // 档位都是 0.25 的整数倍：百分位为 0 → 一位小数（1.0/1.5/2.0），否则两位（0.75/1.25）
+  const long long hundredths = llround(s * 100.0);
+  if (hundredths % 10 == 0)
+    snprintf(buf, sizeof(buf), "%.1fx", (double)hundredths / 100.0);
+  else
+    snprintf(buf, sizeof(buf), "%.2fx", (double)hundredths / 100.0);
+  return buf;
+}
+
 std::string uri_without_fragment(const std::string& uri) {
   size_t pos = uri.find("#t=");
   if (pos == std::string::npos) return uri;

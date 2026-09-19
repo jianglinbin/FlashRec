@@ -266,6 +266,17 @@ Config Config::load(const std::string& path) {
     auto [p, ec] = std::from_chars(v->data(), v->data() + v->size(), out);
     return ec == std::errc() ? out : dft;
   };
+  auto get_double = [&](const char* k, double dft) {
+    auto* v = get(k);
+    if (!v || v->empty()) return dft;
+    try {
+      size_t pos = 0;
+      double out = std::stod(*v, &pos);
+      return pos > 0 ? out : dft;
+    } catch (...) {
+      return dft;  // 坏值回默认，绝不让配置文件把程序搞挂
+    }
+  };
   if (auto* lv = get("log.level"); lv && !lv->empty()) cfg.log_level = *lv;
   cfg.log_trace_http_body = get_bool("log.trace_http_body", cfg.log_trace_http_body);
   cfg.log_http_entry = get_bool("log.http_entry", cfg.log_http_entry);
@@ -311,6 +322,15 @@ Config Config::load(const std::string& path) {
   }
   cfg.live_reconnect_max = get_int("live.reconnect_max", cfg.live_reconnect_max);
   cfg.clipboard_play = get_bool("clipboard.play", cfg.clipboard_play);  // d74
+  // d163：音量/静音持久化（player.volume / player.muted；越界夹回 0..100）
+  cfg.player_volume = get_int("player.volume", cfg.player_volume);
+  if (cfg.player_volume < 0) cfg.player_volume = 0;
+  if (cfg.player_volume > 100) cfg.player_volume = 100;
+  cfg.player_muted = get_bool("player.muted", cfg.player_muted);
+  // d169：倍速持久化（player.speed，夹到 0.25..4.0）
+  cfg.player_speed = get_double("player.speed", cfg.player_speed);
+  if (cfg.player_speed < 0.25) cfg.player_speed = 0.25;
+  if (cfg.player_speed > 4.0) cfg.player_speed = 4.0;
   if (!j.protocol_info.empty()) cfg.protocol_info = j.protocol_info;
   FR_LOG_INFO("[APP] 配置加载完成 {}：port={} auto_play={} retention={}s reconnect={}", path,
               cfg.dlna_port, cfg.dlna_auto_play_on_set_uri, cfg.dlna_progress_retention_sec,

@@ -1,6 +1,7 @@
 #include "ui/views/chrome.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 #include <nanovg.h>
@@ -25,6 +26,11 @@ float clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 // 条端点与端点外扩：滑块中心正好落在两端时也不越出条身（translate(-50%,-50%) 铁律）
 inline float vol_end_pad(const Theme& t) { return t.layout.volKnobHover * 0.5f; }
 
+// d162：音量 ≤0 视同静音 —— 显示层唯一判定口径（静音按钮图标 / 音量条 / OSD 面板
+// 全走这里）。协议上 Mute 是独立 A/V 状态变量，快照真值（muted / volume 两字段）
+// 不动、SOAP 侧 GetMute 不受影响；本函数只服务视觉与交互观感。
+inline bool eff_muted(const PlaybackSnapshot& s) { return s.muted || s.volume <= 0; }
+
 }  // namespace
 
 BarHit bar_hit(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSnapshot& snap,
@@ -45,11 +51,16 @@ BarHit bar_hit(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackS
            in_rect(mx, my, g.timeLeftX - 4, y0, timeW + 6, bh);
 
   r.play = in_rect(mx, my, g.btnPlayX - hs, y0, L.btnHit, bh);
-  r.prev = in_rect(mx, my, g.btnPrevX - hs, y0, L.btnHit, bh);
-  r.next = in_rect(mx, my, g.btnNextX - hs, y0, L.btnHit, bh);
+  // d158：上/下一集 ↔ 停止键互斥（本应用无 playlist，"上一集"恒无数据源，
+  // 两键是否可用整体取决于 next_uri）——无数据时两键不画、也不留隐形热区。
+  const bool has_episode = !snap.next_uri.empty();
+  r.prev = has_episode && in_rect(mx, my, g.btnPrevX - hs, y0, L.btnHit, bh);
+  r.next = has_episode && in_rect(mx, my, g.btnNextX - hs, y0, L.btnHit, bh);
+  r.stop = !has_episode && in_rect(mx, my, g.btnStopX - hs, y0, L.btnHit, bh);
   r.track = in_rect(mx, my, g.trackX, g.cy - 8, g.trackW, 16);
   r.track_x = g.trackX;
   r.track_w = g.trackW;
+  r.speed = in_rect(mx, my, g.speedX - L.speedW * 0.5f, y0, L.speedW, bh);  // d169
   r.mute = in_rect(mx, my, g.volIconX - hs, y0, L.btnHit, bh);
   r.vol = in_rect(mx, my, g.volX - L.volHitPad, g.cy - 9, g.volW + L.volHitPad * 2, 18);
   r.pip = in_rect(mx, my, g.pipX - hs, y0, L.btnHit, bh);
@@ -57,7 +68,7 @@ BarHit bar_hit(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackS
 
   // 媒体类控件在无会话时"视觉禁用"：不算被占用，点击由此落到"空白处"语义上。
   // 用局部副本判断，避免依赖下面 consumed 的推导顺序。
-  if (!media_enabled) r.play = r.prev = r.next = r.track = r.time = false;
+  if (!media_enabled) r.play = r.prev = r.next = r.stop = r.track = r.time = r.speed = false;
 
   // 点击消费：凡落在整条底栏上的按下都不该再触发"空白处 播放/暂停"
   r.consumed = r.any() || my >= g.botY;
@@ -148,18 +159,25 @@ void draw_bottom_bar(NVGcontext* vg, const Theme& t, float w, float h,
     if (st.clicked && cb.on_play_pause) cb.on_play_pause();
   }
 
-  // —— 上一集 / 下一集（媒体类）——
-  {
-    BtnState st = button_hit(in.btns, kBtnPrev, hit.prev, media_enabled, in.down, in.dt, t);
-    const float k = round_btn_bg(vg, t, g.btnPrevX, cy, L.btnHit, st);
-    icon_prev(vg, g.btnPrevX, cy, 12 * k, btn_icon_color(t, st));
-    if (st.clicked && cb.on_prev) cb.on_prev();
-  }
-  {
-    BtnState st = button_hit(in.btns, kBtnNext, hit.next, media_enabled, in.down, in.dt, t);
-    const float k = round_btn_bg(vg, t, g.btnNextX, cy, L.btnHit, st);
-    icon_next(vg, g.btnNextX, cy, 12 * k, btn_icon_color(t, st));
-    if (st.clicked && cb.on_next) cb.on_next();
+  // —— 上一集 / 下一集 ↔ 停止（媒体类；d158：无上/下一集数据时停止键替换两键）——
+  if (!snap.next_uri.empty()) {
+    {
+      BtnState st = button_hit(in.btns, kBtnPrev, hit.prev, media_enabled, in.down, in.dt, t);
+      const float k = round_btn_bg(vg, t, g.btnPrevX, cy, L.btnHit, st);
+      icon_prev(vg, g.btnPrevX, cy, 12 * k, btn_icon_color(t, st));
+      if (st.clicked && cb.on_prev) cb.on_prev();
+    }
+    {
+      BtnState st = button_hit(in.btns, kBtnNext, hit.next, media_enabled, in.down, in.dt, t);
+      const float k = round_btn_bg(vg, t, g.btnNextX, cy, L.btnHit, st);
+      icon_next(vg, g.btnNextX, cy, 12 * k, btn_icon_color(t, st));
+      if (st.clicked && cb.on_next) cb.on_next();
+    }
+  } else {
+    BtnState st = button_hit(in.btns, kBtnStop, hit.stop, media_enabled, in.down, in.dt, t);
+    const float k = round_btn_bg(vg, t, g.btnStopX, cy, L.btnHit, st);
+    icon_stop(vg, g.btnStopX, cy, 12 * k, btn_icon_color(t, st));
+    if (st.clicked && cb.on_stop) cb.on_stop();
   }
 
   // —— 时间（无媒体显示占位；禁用时降一档亮度）——
@@ -204,12 +222,23 @@ void draw_bottom_bar(NVGcontext* vg, const Theme& t, float w, float h,
     }
   }
 
+  // —— 倍速（d169，媒体类：无会话禁用；点击弹出档位列表，列表绘制在 render_loop）——
+  {
+    BtnState st = button_hit(in.btns, kBtnSpeed, hit.speed, media_enabled, in.down, in.dt, t);
+    const float k = pill_btn_bg(vg, t, g.speedX, cy, L.speedW, L.btnBoxW, st);
+    const NVGcolor col = media_enabled ? btn_icon_color(t, st) : t.iconDisabled;
+    text(vg, t, g.speedX, cy, L.speedFont * k, col, format_speed(snap.speed).c_str(),
+         NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+    if (st.clicked && cb.on_speed) cb.on_speed();
+  }
+
   // —— 音量图标 = 静音键（窗口类：任何状态可用；中键与左键同义，见 main）——
   {
     BtnState st = button_hit(in.btns, kBtnMute, hit.mute, true, in.down, in.dt, t);
     const float k = round_btn_bg(vg, t, g.volIconX, cy, L.btnHit, st);
-    const NVGcolor ic = snap.muted ? t.muteIcon : btn_icon_color(t, st);
-    if (snap.muted)
+    const bool shown_muted = eff_muted(snap);  // d162：音量 ≤0 视同静音显示
+    const NVGcolor ic = shown_muted ? t.muteIcon : btn_icon_color(t, st);
+    if (shown_muted)
       icon_volume_muted(vg, g.volIconX, cy, L.volIcon * k, ic, ic);
     else
       icon_volume(vg, g.volIconX, cy, L.volIcon * k, ic);
@@ -222,13 +251,14 @@ void draw_bottom_bar(NVGcontext* vg, const Theme& t, float w, float h,
     const float knob_r = (held || (hit.vol && in.drag_volume)) ? L.volKnobHover * 0.5f
                                                               : L.volKnob * 0.5f;
     const float vp = in.drag_volume ? in.drag_value : clamp01((float)snap.volume / 100.f);
-    volume_bar(vg, t, g.volX + g.volW * 0.5f, cy, g.volW, vp, knob_r, snap.muted);
+    volume_bar(vg, t, g.volX + g.volW * 0.5f, cy, g.volW, vp, knob_r, eff_muted(snap));
     if (in.drag_volume) {
       in.drag_value = vol_percent_at(in.mx, g, t);
       if (!in.down) {
         in.drag_volume = false;
-        // 拖动即表态要出声：静音中被拖动 → 先解除静音再落音量（否则拖了没反应）
-        if (snap.muted && cb.on_mute) cb.on_mute(false);
+        // 拖动即表态要出声：静音中被拖动 → 先解除静音再落音量（否则拖了没反应）；
+        // d162：音量 0 的"视同静音"同样适用 —— 拖上去即恢复有声观感。
+        if (eff_muted(snap) && cb.on_mute) cb.on_mute(false);
         if (cb.on_volume) cb.on_volume(in.drag_value);
       }
     } else if (hit.vol && in.down && !in.drag_progress && in.btns.press_id < 0) {
@@ -350,18 +380,18 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
     const float py = L.osdTopGap;                                   // 固定顶距（d35）
     const float cx = px + L.osdVolW * 0.5f;
     rounded_rect(vg, px, py, L.osdVolW, L.osdVolH, L.osdRadius, t.barBg);
-    icon_volume(vg, cx, py + 24, 14, snap.muted ? t.muteIcon : t.icon);
+    icon_volume(vg, cx, py + 24, 14, eff_muted(snap) ? t.muteIcon : t.icon);
     // 竖条：轨道圆角矩形，填充自底向上（进度语义：底=0 顶=100）
     // 布局（d31 用户反馈：文字与条重叠/贴边不居中）：图标带 py+15..29，条 py+40..110，
     // 文字中线 py+132（上距条底 15px、下距面板底 11px、两侧到图标带对称）
     const float bx = cx - L.osdBarThick * 0.5f;
     const float by = py + 40;
     rounded_rect(vg, bx, by, L.osdBarThick, L.osdBarLen, L.osdBarThick * 0.5f,
-                 snap.muted ? t.muteTrack : t.track);
+                 eff_muted(snap) ? t.muteTrack : t.track);
     const float fill = L.osdBarLen * clamp01((float)(in.osd_value / 100.0));
     if (fill > 0.5f)
       rounded_rect(vg, bx, by + L.osdBarLen - fill, L.osdBarThick, fill, L.osdBarThick * 0.5f,
-                   snap.muted ? t.muteKnob : t.played);
+                   eff_muted(snap) ? t.muteKnob : t.played);
     const std::string pct = std::to_string((int)(in.osd_value + 0.5)) + "%";
     text(vg, t, cx, py + L.osdVolH - 18, L.osdFont, t.subText, pct.c_str(),
          NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
@@ -373,16 +403,20 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
     // 不再比对实时 position —— 旧逻辑 seek 完成后 position==target 恒判后退，
     // 右方向键也显示左箭头。
     // kind3 动作反馈（d32 新增）：osd_value 编码动作 id —— 1 播放 2 暂停
-    // 3 进全屏 4 退全屏 5 进画中画 6 退画中画。
+    // 3 进全屏 4 退全屏 5 进画中画 6 退画中画 7 停止（d158，停止键反馈）。
     const float px = L.osdEdgeGap;                                  // 贴左缘（用户定值）
     // 垂直锚点（d35）：与音量面板同顶边 = 固定顶距 osdTopGap，不随窗口高度缩放
     //（d32 曾按 h*0.25 中心/顶边换算，窗口大时面板位置漂移，用户定值废除）。
     const float py = L.osdTopGap;
-    const float cy = py + L.osdSeekH * 0.5f;
-    const float icon_cx = px + 30;
-    const float icon_half = 9;
-    const float gap = 18;
-    const float right_pad = 24;
+    // d160：小窗口等比收缩 —— 面板高超过窗口高 × osdMaxHRatio 时整体缩（图标/字号/
+    // 间距同比例），恒 ≤1：大窗口不放大，保持 d32/d35 定稿视觉。音量竖面板不参与。
+    const float s = std::min(1.f, h * L.osdMaxHRatio / L.osdSeekH);
+    const float ph = L.osdSeekH * s;
+    const float cy = py + ph * 0.5f;
+    const float icon_cx = px + 30 * s;
+    const float icon_half = 9 * s;
+    const float gap = 18 * s;
+    const float right_pad = 24 * s;
 
     const char* label = nullptr;
     std::string text_buf;
@@ -398,29 +432,43 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
         case 4: label = "退出全屏"; break;
         case 5: label = "画中画"; break;
         case 6: label = "退出画中画"; break;
+        case 7: label = "停止"; break;
         default: label = ""; break;
       }
     }
 
-    const float tw = text_width(vg, L.osdFont, label);
+    const float tw = text_width(vg, L.osdFont * s, label);
     const float pw = icon_cx - px + icon_half + gap + tw + right_pad;
-    rounded_rect(vg, px, py, pw, L.osdSeekH, L.osdRadius, t.barBg);
+    rounded_rect(vg, px, py, pw, ph, L.osdRadius * s, t.barBg);
 
     if (in.osd_kind == 2) {
       if (in.osd_dir >= 1)
-        icon_next(vg, icon_cx, cy, 15, t.icon);
+        icon_next(vg, icon_cx, cy, 15 * s, t.icon);
       else
-        icon_prev(vg, icon_cx, cy, 15, t.icon);
+        icon_prev(vg, icon_cx, cy, 15 * s, t.icon);
     } else {
       const int id = (int)(in.osd_value + 0.5);
-      if (id == 1) icon_play(vg, icon_cx, cy, 18, t.icon);
-      else if (id == 2) icon_pause(vg, icon_cx, cy, 18, t.icon);
-      else if (id == 3 || id == 4) icon_fullscreen(vg, icon_cx, cy, 18, t.icon);
-      else if (id == 5 || id == 6) icon_pip(vg, icon_cx, cy, 18, t.icon);
+      if (id == 1) icon_play(vg, icon_cx, cy, 18 * s, t.icon);
+      else if (id == 2) icon_pause(vg, icon_cx, cy, 18 * s, t.icon);
+      else if (id == 3 || id == 4) icon_fullscreen(vg, icon_cx, cy, 18 * s, t.icon);
+      else if (id == 5 || id == 6) icon_pip(vg, icon_cx, cy, 18 * s, t.icon);
+      else if (id == 7) icon_stop(vg, icon_cx, cy, 15 * s, t.icon);
     }
 
-    text(vg, t, icon_cx + icon_half + gap, cy, L.osdFont, t.subText, label,
+    text(vg, t, icon_cx + icon_half + gap, cy, L.osdFont * s, t.subText, label,
          NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+  } else if (in.osd_kind == 4) {
+    // —— 倍速反馈（d169）：横向面板，居中显示「倍速 1.5x」；无图标 ——
+    const float px = L.osdEdgeGap;
+    const float py = L.osdTopGap;
+    const float s = std::min(1.f, h * L.osdMaxHRatio / L.osdSeekH);
+    const float ph = L.osdSeekH * s;
+    const std::string label = "倍速 " + format_speed(in.osd_value);
+    const float tw = text_width(vg, L.osdFont * s, label.c_str());
+    const float pw = tw + 36 * s;
+    rounded_rect(vg, px, py, pw, ph, L.osdRadius * s, t.barBg);
+    text(vg, t, px + pw * 0.5f, py + ph * 0.5f, L.osdFont * s, t.subText, label.c_str(),
+         NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
   }
   nvgGlobalAlpha(vg, 1.f);
 }
@@ -505,6 +553,85 @@ void draw_ctx_menu(NVGcontext* vg, const Theme& t, const CtxMenuLayout& lay,
     // mutedText(#9aa0aa) 与 subText(#babec6) 太接近，视觉上分不出禁用态（d45 用户实测）
     const NVGcolor col = items[i].enabled ? (hov ? t.icon : t.subText) : t.iconDisabled;
     text(vg, t, lay.x + kCtxPadX + kCtxCheckW, cy, L.titleFont, col, items[i].label);
+  }
+}
+
+// —— d169 倍速档位（唯一真值）——
+namespace {
+const double kSpeedPresets[kSpeedPresetCount] = {0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0};
+}  // namespace
+
+double speed_preset(int index) {
+  if (index < 0 || index >= kSpeedPresetCount) return 1.0;
+  return kSpeedPresets[index];
+}
+
+int speed_preset_nearest(double s) {
+  int best = 0;
+  double bd = 1e9;
+  for (int i = 0; i < kSpeedPresetCount; i++) {
+    const double d = std::fabs(kSpeedPresets[i] - s);
+    if (d < bd) {
+      bd = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+SpeedMenuLayout speed_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float win_h,
+                                  float anchor_cx, float bot_y) {
+  const auto& L = t.layout;
+  SpeedMenuLayout lay;
+  lay.count = kSpeedPresetCount;
+  lay.item_h = L.speedItemH;
+  float maxw = 0.f;
+  for (int i = 0; i < lay.count; i++)
+    maxw = std::max(maxw, text_width(vg, L.speedFont, format_speed(speed_preset(i)).c_str()));
+  lay.w = kCtxPadX + kCtxCheckW + maxw + kCtxRightPad;
+  lay.h = lay.count * lay.item_h + L.speedMenuPadY * 2;
+  lay.x = std::min(std::max(2.f, anchor_cx - lay.w * 0.5f),
+                   std::max(2.f, win_w - lay.w - 2.f));
+  lay.y = std::max(2.f, bot_y - 6.f - lay.h);  // 贴底栏上方 6px
+  for (int i = 0; i < lay.count; i++) lay.ys[i] = L.speedMenuPadY + i * lay.item_h;
+  (void)win_h;
+  return lay;
+}
+
+int speed_menu_item_at(const SpeedMenuLayout& lay, float px, float py) {
+  if (px < lay.x || px > lay.x + lay.w || py < lay.y || py > lay.y + lay.h) return -1;
+  for (int i = 0; i < lay.count; i++) {
+    if (py >= lay.y + lay.ys[i] && py <= lay.y + lay.ys[i] + lay.item_h) return i;
+  }
+  return -1;
+}
+
+void draw_speed_menu(NVGcontext* vg, const Theme& t, const SpeedMenuLayout& lay,
+                     double cur_speed, int hover, const DmgRect* clip) {
+  const auto& L = t.layout;
+  if (!dmg_hit(clip, lay.x, lay.y, lay.w, lay.h)) return;
+  rounded_rect(vg, lay.x, lay.y, lay.w, lay.h, L.osdRadius, t.barBg);
+  const int cur = speed_preset_nearest(cur_speed);
+  for (int i = 0; i < lay.count; i++) {
+    const float iy = lay.y + lay.ys[i];
+    const bool hov = i == hover;
+    if (hov)
+      rounded_rect(vg, lay.x + 4.f, iy, lay.w - 8.f, lay.item_h, L.badgeRadius, t.btnHoverBg);
+    const float cy = iy + lay.item_h * 0.5f;
+    if (i == cur) {  // 当前档位打勾（与右键菜单同一手绘勾选样式）
+      const float x0 = lay.x + kCtxPadX + 4.f;
+      nvgBeginPath(vg);
+      nvgMoveTo(vg, x0, cy + 1.f);
+      nvgLineTo(vg, x0 + 4.f, cy + 5.f);
+      nvgLineTo(vg, x0 + 11.f, cy - 4.f);
+      nvgStrokeColor(vg, t.played);
+      nvgStrokeWidth(vg, 2.f);
+      nvgLineCap(vg, NVG_ROUND);
+      nvgStroke(vg);
+    }
+    const NVGcolor col = hov ? t.icon : t.subText;
+    text(vg, t, lay.x + kCtxPadX + kCtxCheckW, cy, L.speedFont, col,
+         format_speed(speed_preset(i)).c_str());
   }
 }
 

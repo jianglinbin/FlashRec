@@ -61,8 +61,9 @@ struct ViewInput {
 
 struct ViewCallbacks {
   std::function<void()> on_close, on_minimize, on_maximize;
-  std::function<void()> on_play_pause, on_prev, on_next;
+  std::function<void()> on_play_pause, on_prev, on_next, on_stop;  // d158：停止键（无上/下一集数据时）
   std::function<void()> on_pip, on_fullscreen;
+  std::function<void()> on_speed;          // d169：倍速按钮点击（渲染线程切换档位弹层）
   std::function<void(double)> on_seek;     // 绝对秒（释放/点击时提交）
   std::function<void(float)> on_volume;    // 0..1
   std::function<void(bool)> on_mute;       // true = 静音

@@ -33,13 +33,17 @@ struct PlaybackSnapshot {
   bool picture_ready = false; // file-loaded，画面可显示
   int volume = 100;           // 0-100（百分比与 dB 共用此真值，R4）
   bool muted = false;
+  double speed = 1.0;         // 播放倍速（d169；mpv speed 属性，1.0 = 原速）
   bool has_session = false;   // true = 有会话（含保持期）
   double stopped_at = 0.0;    // 进入 STOPPED 的单调时刻；0 = 非保持期
 };
 
 // libupnp 回调线程 → 主线程 的指令（只投递，不执行）
 struct DmrCommand {
-  enum class Type { SetUri, SetNextUri, Play, Pause, Stop, Seek, SetVolume, SetMute, SelectPreset };
+  enum class Type {
+    SetUri, SetNextUri, Play, Pause, Stop, Seek, SetVolume, SetMute, SelectPreset,
+    SetSpeed  // d169：本地 UI 倍速（非 UPnP 动作；不产生 AVT 事件变量）
+  };
   Type type = Type::Play;
   std::string uri;
   std::string metadata;
@@ -47,12 +51,14 @@ struct DmrCommand {
   double seek_to = 0.0;       // 秒（绝对位置）
   int volume = 0;             // 0-100
   bool mute = false;
+  double speed = 1.0;         // SetSpeed：倍速（0.25..4.0）
   int req_id = 0;             // req#N 日志关联号
 };
 
 // 主线程 → DMR / UI 的事件（不可变，单向）
 struct PlayerEvent {
-  enum class Kind { StateChanged, Position, MediaInfo, Volume };
+  // d169：Speed 只更新快照供 UI 显示；倍速不是 UPnP AVT 变量，SOAP/GENA 侧忽略。
+  enum class Kind { StateChanged, Position, MediaInfo, Volume, Speed };
   Kind kind = Kind::StateChanged;
   PlaybackSnapshot snap;
 };

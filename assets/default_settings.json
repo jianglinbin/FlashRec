@@ -15,5 +15,6 @@
     "window": { "prefer": "last", "monitors": [] }
   },
   "live": { "reconnect_max": 3 },
+  "player": { "volume": 100, "muted": false },
   "clipboard": { "play": true }
 }
