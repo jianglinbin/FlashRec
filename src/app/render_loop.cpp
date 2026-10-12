@@ -413,11 +413,13 @@ void RenderLoop::frame(double now) {
   // —— d45：右键菜单状态机（必须跑在跳帧判定**之前**：按下/弹起边沿一帧都不能漏，
   //     否则"按下记位、弹起开菜单"的配对会错乱。状态切换时置 force_dirty 保证
   //     开/关的那一帧一定被画出来）——
-  // 进画中画：右键菜单 / 倍速弹层 / 皮肤弹层连带关闭
-  if (pip_mode_ && (ctx_open_ || speed_open_ || skin_open_)) {
+  // 进画中画：右键菜单 / 倍速弹层 / 皮肤弹层 / 帮助面板连带关闭
+  if (pip_mode_ && (ctx_open_ || speed_open_ || skin_open_ || help_open_)) {
     ctx_open_ = false;
+    close_ctx_sub();  // v0.6.1 d347：子菜单连带
     speed_open_ = false;
     skin_open_ = false;
+    help_open_ = false;
   }
   if (menu_dismiss_.exchange(false, std::memory_order_acq_rel)) {  // 主线程 ESC 请求
     if (skin_open_) {                                              // d182：先收皮肤弹层
@@ -426,6 +428,8 @@ void RenderLoop::frame(double now) {
     } else if (speed_open_) {                                      // d169：再收倍速弹层
       speed_open_ = false;
       force_dirty_.store(true, std::memory_order_release);
+    } else if (ctx_sub_open_) {                    // d347：子菜单开着先收子菜单
+      close_ctx_sub();
     } else if (ctx_open_) {
       ctx_open_ = false;
       force_dirty_.store(true, std::memory_order_release);
@@ -437,6 +441,7 @@ void RenderLoop::frame(double now) {
     if (in.down_right && !right_prev_) {              // 右键按下边沿
       if (ctx_open_) {                                // 菜单开着再按右键 = 关闭
         ctx_open_ = false;
+        close_ctx_sub();  // v0.6.1 d347：子菜单连带
         ctx_right_suppress_ = true;                   // 本次弹起不得重开
         force_dirty_.store(true, std::memory_order_release);
       }
@@ -447,6 +452,7 @@ void RenderLoop::frame(double now) {
         const float dx = in.mx - right_x_, dy = in.my - right_y_;
         if (dx * dx + dy * dy <= 36.f) {              // 原地弹起（6px 防抖，d25 同口径）
           ctx_open_ = true;
+          close_ctx_sub();                             // d347：重开菜单子菜单不残留
           speed_open_ = false;                         // d169：右键菜单与倍速弹层互斥
           ctx_anchor_x_ = right_x_;
           ctx_anchor_y_ = right_y_;
@@ -552,8 +558,10 @@ void RenderLoop::frame(double now) {
   // 判定正常，故保持 1（后续若要精调，改为主线程算好传入，勿在渲染线程调 GLFW）。
   {
     const InteractionThresholds thr = interaction_thresholds(1.f);
-    if (pip_mode_ || ctx_open_ || speed_open_ || skin_open_) {
-      // 画中画/右键菜单/倍速弹层/皮肤弹层接管期间：打断进行中的按压（见 d25/d45/d169/d182）
+    if (pip_mode_ || ctx_open_ || ctx_sub_open_ || speed_open_ || skin_open_ ||
+        pan_drag_ || help_open_) {
+      // 画中画/右键菜单/子菜单/倍速弹层/皮肤弹层/画面平移拖拽/帮助面板接管期间：
+      // 打断进行中的按压（见 d25/d45/d169/d182/d347/d350）
       if (ptr_state_ != PtrState::Idle) {
         ptr_state_ = PtrState::Idle;
         in_dbl_ = false;
@@ -851,6 +859,17 @@ void RenderLoop::frame(double now) {
     dmg_add(last_regions_.ctx_menu);
     dmg_reasons |= 1u << 4;
   }
+  // —— d347：二级子菜单开着（同主菜单口径；hover 高亮/勾选随动）——
+  if (ctx_sub_open_) {
+    dmg_add(last_regions_.ctx_sub_menu);
+    dmg_reasons |= 1u << 4;
+  }
+  // —— v0.6.1 d350：帮助面板开着（全屏遮罩 + 卡片；开关帧由 set_help 置
+  // force_dirty，开着期间恒全屏失效——低频面板，不做精确差集）——
+  if (help_open_) {
+    dmg_all(1u << 4);
+    dmg_reasons |= 1u << 4;
+  }
   // —— d169：倍速弹层开着（hover 高亮/按下反馈；几何固定，用上帧存档）——
   if (speed_open_) {
     dmg_add(last_regions_.speed_menu);
@@ -1127,7 +1146,9 @@ void RenderLoop::frame(double now) {
   // 按压/点击不落——菜单面板叠在哪块按钮上，点菜单就不能误触底下的按钮）。
   // 拖拽进行中的除外：传 false 会让松手瞬间误判"拖完提交"，故保持原值。
   ViewInput vin = in;
-  if ((ctx_open_ || speed_open_ || skin_open_) && !in.drag_progress && !in.drag_volume)
+  if ((ctx_open_ || ctx_sub_open_ || speed_open_ || skin_open_ || pan_drag_ ||
+       help_open_) &&
+      !in.drag_progress && !in.drag_volume)
     vin.down = false;
 
   // —— v0.4.0 d57 修：隐藏按钮的冻结值清理（buttons_busy 恒真 → 60fps 死循环）——
@@ -1162,10 +1183,18 @@ void RenderLoop::frame(double now) {
   const bool on_center = snap.state == TransportState::PausedPlayback &&
                          center_play_hit(theme_, (float)w, (float)h, vin.mx, vin.my);
   // —— d45：右键菜单条目表 + 布局（每帧重算；命中与绘制共用同一份几何）——
-  CtxMenuItem ctx_items[16];
+  // v0.6.1 d346：16 → 24（缩放四档 + 分隔线入菜单后满员 18；与 CtxMenuLayout
+  // 的 ys[24]/sep[24] 成对扩容，两处必须同改）。
+  // v0.6.1 d347：二级子菜单（「窗口大小」）——子条目表/布局与主菜单同帧重算，
+  // 状态成员见 render_loop.h（ctx_sub_*）；关闭点统一走成员 close_ctx_sub()。
+  CtxMenuItem ctx_items[24];
   int ctx_n = 0;
   CtxMenuLayout ctx_lay;
   int ctx_hover = -1;
+  CtxMenuItem sub_items[8];
+  int sub_n = 0;
+  CtxMenuLayout sub_lay;
+  bool in_sub = false;
   if (ctx_open_) {
     const bool media = snap.has_session;
     // ★d322：AirPlay 会话禁用「播放 / 暂停」条目（直播流不支持暂停，与底栏同判定）
@@ -1188,6 +1217,17 @@ void RenderLoop::frame(double now) {
     add(nullptr, CtxAction::None, false);
     add("媒体信息（完整）", CtxAction::ShowMediaInfo, true, true, show_info_);
     add("投屏自动全屏", CtxAction::CastAutoFullscreen, true, true, cast_auto_fs_);
+    // v0.6.1 d342：窗口置顶（独立于画中画；勾选态 = always_on_top_ 镜像）
+    add("窗口置顶", CtxAction::AlwaysOnTop, true, true, always_on_top_);
+    // v0.6.1 d353：解码选择改二级子菜单（d352 的二值开关不够用——真机证实
+    // auto-safe 选中的 d3d11va-copy 花屏，需要可选硬解后端；双显卡机 NVDEC
+    // 走 RTX 专用解码器）。父条目手工构造（sub=true 画 ▸）：
+    ctx_items[ctx_n++] = {"解码", CtxAction::DecodeMenu, true, false, false, true};
+    add(nullptr, CtxAction::None, false);
+    // v0.6.1 d347：窗口大小改二级子菜单——主菜单只留父条目（sub=true 画 ▸，
+    // hover 展开；四档 Zoom50–200 进子面板，勾选 = zoom_pct_ 镜像）。
+    // add lambda 无 sub 参数，父条目手工构造：
+    ctx_items[ctx_n++] = {"窗口大小", CtxAction::WindowZoomMenu, true, false, false, true};
     add(nullptr, CtxAction::None, false);
     if (in.fullscreen)
       add("停止", CtxAction::Stop, media);
@@ -1196,6 +1236,61 @@ void RenderLoop::frame(double now) {
     ctx_lay = ctx_menu_layout(nvg_.ctx(), theme_, (float)w, (float)h, ctx_items, ctx_n,
                               ctx_anchor_x_, ctx_anchor_y_);
     ctx_hover = ctx_lay.item_at(in.mx, in.my);
+
+    // —— v0.6.1 d347/d353：二级子菜单构造 + 布局 + hover 展开/收起（两个父
+    // 条目：「窗口大小」/「解码」，ctx_sub_kind_ 分派）。子条目表每帧重建
+    //（主菜单条目表本身条件增减，父条目下标每帧重扫不缓存）。 ——
+    ctx_sub_hover_ = -1;
+    if (ctx_sub_open_) {
+      // 父条目仍存在才维持展开；否则（菜单重建/会话变化）收起
+      const CtxAction parent_act =
+          ctx_sub_kind_ == 1 ? CtxAction::DecodeMenu : CtxAction::WindowZoomMenu;
+      int pidx = -1;
+      for (int i = 0; i < ctx_n; ++i)
+        if (ctx_items[i].action == parent_act) pidx = i;
+      if (pidx < 0) {
+        ctx_sub_open_ = false;
+      } else {
+        int sn = 0;
+        if (ctx_sub_kind_ == 1) {
+          // d353：解码四档（勾选 = hwdec_mode_ 镜像；与 mpv_bridge 的模式表一一对应）
+          sub_items[sn++] = {"软解", CtxAction::DecodeSw, true, true, hwdec_mode_ == 0};
+          sub_items[sn++] = {"硬解 · 自动", CtxAction::DecodeAuto, true, true, hwdec_mode_ == 1};
+          sub_items[sn++] = {"硬解 · NVDEC", CtxAction::DecodeNvdec, true, true, hwdec_mode_ == 2};
+          sub_items[sn++] = {"硬解 · DXVA2", CtxAction::DecodeDxva2, true, true, hwdec_mode_ == 3};
+        } else {
+          sub_items[sn++] = {"50%", CtxAction::Zoom50, true, true, zoom_pct_ == 50};
+          sub_items[sn++] = {"100%", CtxAction::Zoom100, true, true, zoom_pct_ == 100};
+          sub_items[sn++] = {"150%", CtxAction::Zoom150, true, true, zoom_pct_ == 150};
+          sub_items[sn++] = {"200%", CtxAction::Zoom200, true, true, zoom_pct_ == 200};
+          // v0.6.1 d354：上限 300% → 500%，新增三档（与数字键 1–7 同步）。
+          sub_items[sn++] = {"300%", CtxAction::Zoom300, true, true, zoom_pct_ == 300};
+          sub_items[sn++] = {"400%", CtxAction::Zoom400, true, true, zoom_pct_ == 400};
+          sub_items[sn++] = {"500%", CtxAction::Zoom500, true, true, zoom_pct_ == 500};
+        }
+        sub_n = sn;
+        // 锚 = 父条目右缘中点（ctx_menu_layout 内部做越界回夹，贴右缘自动左弹）
+        sub_lay = ctx_menu_layout(nvg_.ctx(), theme_, (float)w, (float)h, sub_items, sub_n,
+                                  ctx_lay.x + ctx_lay.w,
+                                  ctx_lay.y + ctx_lay.ys[pidx] + ctx_lay.item_h * 0.5f);
+        ctx_sub_hover_ = sub_lay.item_at(in.mx, in.my);
+        in_sub = in.mx >= sub_lay.x && in.mx < sub_lay.x + sub_lay.w &&
+                 in.my >= sub_lay.y && in.my < sub_lay.y + sub_lay.h;
+        // 光标既不在父条目也不在子面板 → 收起（hover 展开的对偶；父条目 hover
+        // 展开在下面统一处理）
+        if (!in_sub && ctx_hover != pidx) ctx_sub_open_ = false;
+      }
+    }
+    // hover 到父条目 → 展开（Windows 惯例；force_dirty 保证出现帧被画出）。
+    // d353：记录展开的是哪个父条目（子菜单构造/交互分派依据）。
+    if (ctx_open_ && !ctx_sub_open_ && ctx_hover >= 0 && ctx_items[ctx_hover].enabled) {
+      const CtxAction hact = ctx_items[ctx_hover].action;
+      if (hact == CtxAction::WindowZoomMenu || hact == CtxAction::DecodeMenu) {
+        ctx_sub_open_ = true;
+        ctx_sub_kind_ = hact == CtxAction::DecodeMenu ? 1 : 0;
+        force_dirty_.store(true, std::memory_order_release);
+      }
+    }
   }
 
   // —— d169：倍速档位弹层几何（开着的帧才需要；命中与绘制共用同一份）——
@@ -1230,9 +1325,13 @@ void RenderLoop::frame(double now) {
     R.skin_menu = DmgRect{(int)skin_lay.x, (int)skin_lay.y, (int)skin_lay.w, (int)skin_lay.h};
   }
 
-  // 中键：音量区 = 静音切换（与点音量图标同义）
+  // 中键：静音切换（与点音量图标同义）。★v0.6.1 d355 放开到全窗口——原实现只在
+  // 音量滑杆热区（bh.vol）生效，底栏淡出时热区不存在，用户实测「中键未实现静音」；
+  // F1 帮助写的也是「鼠标中键」无区域限定。弹层/菜单/帮助开着时不抢（让位给
+  // 各自的点击语义）；无会话也可用（音量/静音 = 窗口类控件，恒可用）。
   if (in.down_middle && !mid_prev_) {
-    if (bh.vol) channel_.post_intent({UiIntent::Kind::Mute, 0, !snap.muted});
+    const bool popup = ctx_open_ || ctx_sub_open_ || speed_open_ || skin_open_ || help_open_;
+    if (!popup) channel_.post_intent({UiIntent::Kind::Mute, 0, !snap.muted});
   }
   mid_prev_ = in.down_middle;
 
@@ -1278,18 +1377,123 @@ void RenderLoop::frame(double now) {
                                 UiIntent::DragRegion::None,
                                 (int)UiIntent::UiPref::CastAutoFullscreen});
           break;
+        // v0.6.1 d342：窗口置顶 —— 照 CastAutoFullscreen 模式：渲染线程即时翻转
+        // 勾选（本帧反馈），主线程 UiPrefChanged 分支执行 set_floating + 落盘 +
+        // set_always_on_top 回推（托盘/快捷键入口不经此处，只回推真值）。
+        case CtxAction::AlwaysOnTop:
+          always_on_top_ = !always_on_top_;
+          channel_.post_intent({UiIntent::Kind::UiPrefChanged, 0.0, always_on_top_,
+                                UiIntent::DragRegion::None,
+                                (int)UiIntent::UiPref::AlwaysOnTop});
+          break;
+        // v0.6.1 d353：解码选择移入二级子菜单（原 d352 二值 DecodeToggle 分支
+        // 废弃；DecodeSw/Auto/Nvdec/Dxva2 在子菜单交互块分发）。
+        // v0.6.1 d346：窗口缩放四档 —— 勾选态不在渲染线程翻转（档位真值在主线程
+        // zoom_pct，守卫可能拒绝应用），post 意图由主线程执行并经 set_zoom 回推。
+        // d347：Zoom50–200 四档收进子菜单，激活逻辑移至下方子菜单交互块（主菜单
+        // 已无这四条，此处不再分发）。
         case CtxAction::Close: channel_.post_intent({UiIntent::Kind::Close}); break;
-        case CtxAction::None: break;
+        default: break;  // d347：WindowZoomMenu（父条目无动作，展开走 hover）/ Zoom* 在子菜单块
       }
     };
     if (in.down && !ctx_lprev_) {
       ctx_press_ = ctx_hover;                       // 按下：锁定条目（菜单外 -1）
     } else if (!in.down && ctx_lprev_) {
-      if (ctx_press_ >= 0 && ctx_hover == ctx_press_) ctx_activate(ctx_press_);
-      ctx_open_ = false;                            // 任何左键弹起都收菜单
-      force_dirty_.store(true, std::memory_order_release);
+      // d349：同条目按下+弹起且该条目是子菜单父条目 → 保持菜单与子菜单展开
+      //（Windows 惯例：点击父级不关闭、不动作，展开由 hover 逻辑管理）。
+      // 其余情况照旧：激活命中条目并收菜单；弹起在子面板内豁免收主菜单。
+      const bool on_sub_parent =
+          ctx_press_ >= 0 && ctx_press_ == ctx_hover && ctx_press_ < ctx_n &&
+          ctx_items[ctx_press_].action == CtxAction::WindowZoomMenu;
+      if (on_sub_parent) {
+        // 仅确保子菜单展开（hover 已展开过；此处兜底直点场景）
+        force_dirty_.store(true, std::memory_order_release);
+      } else {
+        if (ctx_press_ >= 0 && ctx_hover == ctx_press_) ctx_activate(ctx_press_);
+        // d347：弹起点在子面板内时不收主菜单——这次弹起属于子菜单交互
+        //（子菜单自己的按下/弹起逻辑处理）；否则照旧收主菜单（连带子菜单）。
+        if (!in_sub) {
+          ctx_open_ = false;                        // 任何左键弹起都收菜单
+          close_ctx_sub();
+        }
+        force_dirty_.store(true, std::memory_order_release);
+      }
     }
     ctx_lprev_ = in.down;
+  }
+
+  // —— v0.6.1 d347：子菜单左键交互（标准菜单语义：同条目按下+弹起才激活；
+  //     点子面板外 = 只收子菜单）。必须排在主菜单交互之后：激活路径会收掉
+  //     ctx_open_，主菜单 if(ctx_open_) 块本帧已执行完毕互不影响。 ——
+  if (ctx_sub_open_) {
+    if (in.down && !ctx_sub_lprev_) {
+      ctx_sub_press_ = ctx_sub_hover_;              // 按下：锁定子条目
+    } else if (!in.down && ctx_sub_lprev_) {
+      if (ctx_sub_press_ >= 0 && ctx_sub_hover_ == ctx_sub_press_ &&
+          sub_items[ctx_sub_press_].enabled) {
+        // 激活子条目（Zoom50–200 → post 意图，主线程 set_zoom 执行；
+        // d353 Decode* → post DecodeMode 意图，主线程 set_hwdec_mode 执行）
+        // + 收全部菜单
+        switch (sub_items[ctx_sub_press_].action) {
+          case CtxAction::Zoom50:
+            channel_.post_intent({UiIntent::Kind::WindowZoom, 50.0});
+            break;
+          case CtxAction::Zoom100:
+            channel_.post_intent({UiIntent::Kind::WindowZoom, 100.0});
+            break;
+          case CtxAction::Zoom150:
+            channel_.post_intent({UiIntent::Kind::WindowZoom, 150.0});
+            break;
+          case CtxAction::Zoom200:
+            channel_.post_intent({UiIntent::Kind::WindowZoom, 200.0});
+            break;
+          // v0.6.1 d354：500% 扩展三档
+          case CtxAction::Zoom300:
+            channel_.post_intent({UiIntent::Kind::WindowZoom, 300.0});
+            break;
+          case CtxAction::Zoom400:
+            channel_.post_intent({UiIntent::Kind::WindowZoom, 400.0});
+            break;
+          case CtxAction::Zoom500:
+            channel_.post_intent({UiIntent::Kind::WindowZoom, 500.0});
+            break;
+          case CtxAction::DecodeSw:
+            hwdec_mode_ = 0;
+            channel_.post_intent({UiIntent::Kind::DecodeMode, 0.0});
+            break;
+          case CtxAction::DecodeAuto:
+            hwdec_mode_ = 1;
+            channel_.post_intent({UiIntent::Kind::DecodeMode, 1.0});
+            break;
+          case CtxAction::DecodeNvdec:
+            hwdec_mode_ = 2;
+            channel_.post_intent({UiIntent::Kind::DecodeMode, 2.0});
+            break;
+          case CtxAction::DecodeDxva2:
+            hwdec_mode_ = 3;
+            channel_.post_intent({UiIntent::Kind::DecodeMode, 3.0});
+            break;
+          default: break;
+        }
+        ctx_open_ = false;
+        close_ctx_sub();
+      } else {
+        close_ctx_sub();                            // 点子面板外/空白 = 只收子菜单
+      }
+      force_dirty_.store(true, std::memory_order_release);
+    }
+    ctx_sub_lprev_ = in.down;
+  }
+
+  // —— v0.6.1 d350：F1 帮助面板 —— 点击面板任意处关闭（经 ToggleHelp 意图回
+  // 主线程统一翻转镜像，避免双真值）。开着时底层已被冻结（vin.down=false），
+  // 这里只拦「弹起」事件；F1/ESC 关闭在主线程各自链路处理。 ——
+  if (help_open_) {
+    if (!in.down && help_lprev_) {
+      channel_.post_intent({UiIntent::Kind::ToggleHelp});
+      force_dirty_.store(true, std::memory_order_release);
+    }
+    help_lprev_ = in.down;
   }
 
   // —— d169：倍速弹层左键交互（标准菜单语义：同条目按下+弹起才激活；点面板外=只关）——
@@ -1400,7 +1604,10 @@ void RenderLoop::frame(double now) {
   // d169：倍速按钮点击 → 切换档位弹层（纯渲染线程本地状态，不绕主线程；与右键菜单互斥）
   cb.on_speed = [this] {
     speed_open_ = !speed_open_;
-    if (speed_open_) ctx_open_ = false;
+    if (speed_open_) {
+      ctx_open_ = false;
+      close_ctx_sub();  // d347：互斥连带
+    }
     speed_press_ = -1;
     speed_lprev_ = false;
     force_dirty_.store(true, std::memory_order_release);
@@ -1411,6 +1618,7 @@ void RenderLoop::frame(double now) {
     skin_open_ = !skin_open_;
     if (skin_open_) {
       ctx_open_ = false;
+      close_ctx_sub();  // d347：互斥连带
       speed_open_ = false;
       skin_at_cursor_ = false;
     }
@@ -1446,6 +1654,12 @@ void RenderLoop::frame(double now) {
     media_.vcodec = st.video_codec;
     media_.acodec = st.audio_codec;
     media_.hwname = st.hwdec_name;
+    // v0.6.1 d353：解码方式镜像真值校正（重载完成/后端不可用回落都会反映到
+    // 这里）。"no" = 软解 → 镜像归 0；非 "no" 无法区分具体硬解后端，维持现值。
+    if (!media_.hwname.empty()) {
+      if (media_.hwname == "no") hwdec_mode_ = 0;
+      else if (hwdec_mode_ == 0) hwdec_mode_ = 1;  // 软解镜像但实测硬解 → 回默认档
+    }
   }
 
   // —— d44/d45 → d146 R5 常驻徽章（叠在视频/舞台左上角，画中画小窗不画）——
@@ -1661,6 +1875,11 @@ void RenderLoop::frame(double now) {
   // —— d45：右键菜单（全栈最顶层：盖过视图与徽章）——
   if (!pip_mode_ && ctx_open_)
     draw_ctx_menu(nvg_.ctx(), theme_, ctx_lay, ctx_items, ctx_n, ctx_hover, clip);
+  // —— v0.6.1 d347：二级子菜单（比主菜单更顶层；锚在父条目右缘）——
+  if (!pip_mode_ && ctx_sub_open_)
+    draw_ctx_menu(nvg_.ctx(), theme_, sub_lay, sub_items, sub_n, ctx_sub_hover_, clip);
+  // —— v0.6.1 d350：F1 帮助面板（浮层栈顶；全屏遮罩压暗 + 居中快捷键表）——
+  if (!pip_mode_ && help_open_) draw_help(nvg_.ctx(), theme_, (float)w, (float)h, clip);
 
   // 按钮交互收尾（必须在每帧末尾推进，画中画等无按钮帧也不例外，
   // 否则"松开"边沿会漏掉、按压归属会一直挂着）
@@ -1704,6 +1923,10 @@ void RenderLoop::frame(double now) {
   // 在出帧路径算出，菜单开着期间几何固定（锚点定死），下一帧归因直接消费。
   if (ctx_open_)
     R.ctx_menu = DmgRect{(int)ctx_lay.x, (int)ctx_lay.y, (int)ctx_lay.w, (int)ctx_lay.h};
+  // d347：子菜单面板矩形（同 ctx_lay 口径；差集归因与 hover 重绘基准用）
+  if (ctx_sub_open_)
+    R.ctx_sub_menu =
+        DmgRect{(int)sub_lay.x, (int)sub_lay.y, (int)sub_lay.w, (int)sub_lay.h};
   last_regions_ = R;
   last_w_ = w;
   last_h_ = h;

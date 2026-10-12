@@ -113,6 +113,8 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
+          # ★v0.6.1 d359：libssl-dev/libplist-dev = Linux AirPlay（FR_AIRPLAY=ON）的
+          # 系统依赖（README 构建 §）。之前漏装 → Linux 包静默无 AirPlay。
           sudo apt-get install -y cmake ninja-build patchelf wget dpkg-dev pkg-config \
             libmpv-dev libsystemd-dev libssl-dev libplist-dev python3 python3-venv
       - name: Cache third_party/build/tools

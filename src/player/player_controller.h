@@ -38,6 +38,9 @@ class PlayerController {
   bool init_render(void* (*get_proc)(void* user, const char* name), void* user);
   // mpv 实测视频信息整包（渲染线程 2Hz 轮询读，d44/d45；无视频各字段回 -1）
   VideoStats video_stats();
+  // v0.6.1 d343：视频显示尺寸（SAR 修正；数字键缩放档位锚定基准）。mpv API 仍
+  // 收口在本层（规则：mpv 只准出现在 src/player/），main 经此转发调用。
+  bool video_display_size(int* w, int* h);
 
   // —— d124：GL 后端失败 → 软件渲染兜底（渲染线程专用，见 mpv_bridge.h）——
   // 返回 true = 本次发生了后端切换，调用方应强制重渲一帧
@@ -49,6 +52,14 @@ class PlayerController {
   // d125：渲染线程用 SEH 接住显卡驱动异常后上报（见 platform/seh_guard.h），
   // 使下帧的 switch_video_backend_if_needed() 生效
   void report_gl_crash();
+  // v0.6.1 d350：画面缩放/平移（mpv video-zoom / video-pan-x|y，渲染侧会话级；
+  // main 经此转发——mpv API 收口规则）。新会话在 mpv_bridge::load_uri 内重置。
+  // d351：zoom 入参为 mpv 原生 2^z 标度（0=适配基准），百分比换算在 main 侧。
+  void set_video_zoom(double z);
+  void set_video_pan(double x, double y);
+  // v0.6.1 d353：解码方式选择（右键「解码」子菜单）。0 软解 / 1 自动 / 2 NVDEC /
+  // 3 DXVA2。内部按位重载续播（对已加载流确定生效），重载重置的渲染属性由 main 重放。
+  void set_hwdec_mode(int mode);
   // d184：视频填充（cover=1 / contain=0）
   void set_panscan(double p);
   // ★d295：当前是否处于「镜像自适应填充」模式（回环镜像流 = d281 的按比例自适应）。

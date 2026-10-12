@@ -485,9 +485,10 @@ bool WindowGLFW::create(int w, int h, const char* title) {
     auto* self = static_cast<WindowGLFW*>(glfwGetWindowUserPointer(w));
     if (self && self->on_mouse_move) self->on_mouse_move(x, y);
   });
-  glfwSetMouseButtonCallback(win_, [](GLFWwindow* w, int button, int action, int) {
+  glfwSetMouseButtonCallback(win_, [](GLFWwindow* w, int button, int action, int mods) {
     auto* self = static_cast<WindowGLFW*>(glfwGetWindowUserPointer(w));
-    if (self && self->on_mouse_btn) self->on_mouse_btn(button, action);
+    // v0.6.1 d350：转发 mods —— Ctrl+左键 = 画面平移拖拽手势的判定输入。
+    if (self && self->on_mouse_btn) self->on_mouse_btn(button, action, mods);
   });
   glfwSetKeyCallback(win_, [](GLFWwindow* w, int key, int, int action, int mods) {
     auto* self = static_cast<WindowGLFW*>(glfwGetWindowUserPointer(w));
@@ -495,7 +496,19 @@ bool WindowGLFW::create(int w, int h, const char* title) {
   });
   glfwSetScrollCallback(win_, [](GLFWwindow* w, double x, double y) {
     auto* self = static_cast<WindowGLFW*>(glfwGetWindowUserPointer(w));
-    if (self && self->on_scroll) self->on_scroll(x, y);
+    if (!self || !self->on_scroll) return;
+    // v0.6.1 d346：scroll 回调不携带修饰键，用 glfwGetKey 现查（跨平台统一，无平台宏）。
+    int mods = 0;
+    if (glfwGetKey(w, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+        glfwGetKey(w, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS)
+      mods |= GLFW_MOD_CONTROL;
+    if (glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+        glfwGetKey(w, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS)
+      mods |= GLFW_MOD_SHIFT;
+    if (glfwGetKey(w, GLFW_KEY_LEFT_ALT) == GLFW_PRESS ||
+        glfwGetKey(w, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS)
+      mods |= GLFW_MOD_ALT;
+    self->on_scroll(x, y, mods);
   });
   // 进入/离开窗口（d36：光标显隐前提之一"鼠标在窗口范围内"）
   glfwSetCursorEnterCallback(win_, [](GLFWwindow* w, int entered) {
@@ -706,6 +719,22 @@ void WindowGLFW::set_floating(bool on) {
 
 void WindowGLFW::set_window_size(int w, int h) {
   if (win_) glfwSetWindowSize(win_, w, h);
+}
+
+// v0.6.1 d348：物理像素口径设窗口尺寸（缩放档位用——视频显示尺寸是物理像素）。
+// GLFW 3.4 glfwGetPlatform 运行时探测后端：Wayland 的 glfwSetWindowSize 单位是
+// 逻辑（surface）像素，物理 = 逻辑 × contentScale，故物理 → 逻辑要**除**回去；
+// Win32 / X11 的窗口尺寸单位就是物理像素，直传。
+void WindowGLFW::set_window_size_physical(int w, int h) {
+  if (!win_) return;
+  if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
+    const float s = content_scale();
+    if (s > 0.01f) {
+      w = (int)std::lround((float)w / s);
+      h = (int)std::lround((float)h / s);
+    }
+  }
+  glfwSetWindowSize(win_, w, h);
 }
 
 void WindowGLFW::set_pos(int x, int y) {

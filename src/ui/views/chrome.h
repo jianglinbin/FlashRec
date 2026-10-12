@@ -132,7 +132,17 @@ enum class CtxAction {
   None, PlayPause, Prev, Next, Stop, ToggleFullscreen, Pip,
   // d146 R5：三项信息徽章合并为一项；R2：新增投屏自动全屏（两项均勾选 + R1 持久化）。
   // 旧 ShowInfo/ShowVideoFps/ShowUiFps 已废弃（台账记"已废弃"，编号不删）。
-  ShowMediaInfo, CastAutoFullscreen, Skin, Close,
+  // v0.6.1 d342：窗口置顶（独立于画中画的用户置顶开关，勾选项 + 持久化）。
+  // v0.6.1 d346：窗口缩放四档（issue #1 体感扩展：快捷档 + 步进键；勾选当前档）。
+  // v0.6.1 d347：四档收进二级子菜单——主菜单只留「窗口大小」父条目（sub=true 画 ▸）。
+  ShowMediaInfo, CastAutoFullscreen, AlwaysOnTop, Skin, Close,
+  WindowZoomMenu,  // d347：窗口大小子菜单父条目（子条目 = 下方 Zoom50–200）
+  Zoom50, Zoom100, Zoom150, Zoom200,
+  // v0.6.1 d353：解码选择二级子菜单（「解码」父条目 + 四档；取代 d352 的二值
+  // DecodeToggle——真机证实 d3d11va-copy 花屏后需要可选硬解后端）。
+  DecodeMenu, DecodeSw, DecodeAuto, DecodeNvdec, DecodeDxva2,
+  // v0.6.1 d354：窗口缩放档位上限 300% → 500%（新增三档；数字键 1–7 同步扩展）。
+  Zoom300, Zoom400, Zoom500,
 };
 
 struct CtxMenuItem {
@@ -141,6 +151,7 @@ struct CtxMenuItem {
   bool enabled = true;
   bool checkable = false;       // 左侧留 ✓ 勾选位
   bool checked = false;
+  bool sub = false;             // v0.6.1 d347：有二级子菜单（右侧画 ▸；展开由调用方管理）
 };
 
 // 菜单几何（绘制与条目命中共用同一份，禁止两处各算）。
@@ -148,8 +159,10 @@ struct CtxMenuItem {
 struct CtxMenuLayout {
   float x = 0, y = 0, w = 0, h = 0;   // 面板矩形（窗口坐标）
   float item_h = 0, sep_h = 0, pad_y = 0;
-  float ys[16] = {};
-  bool sep[16] = {};
+  // v0.6.1 d346：16 → 24（缩放四档条目后满员 18，原 16 会溢出——与
+  // render_loop.cpp 的 ctx_items[24] 成对扩容，改一处必须改另一处）。
+  float ys[24] = {};
+  bool sep[24] = {};
   int count = 0;
   int item_at(float px, float py) const;  // 命中条目下标（-1 = 无，含面板外）
 };
@@ -162,6 +175,11 @@ CtxMenuLayout ctx_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float
 void draw_ctx_menu(NVGcontext* vg, const Theme& t, const CtxMenuLayout& lay,
                    const CtxMenuItem* items, int n, int hover,
                    const DmgRect* clip = nullptr);
+
+// —— v0.6.1 d350：F1 帮助面板（全屏遮罩 + 居中卡片，快捷键两列清单）——
+// 纯展示；点击关闭由调用方处理（render_loop 拦弹起 → ToggleHelp 意图）。
+void draw_help(NVGcontext* vg, const Theme& t, float win_w, float win_h,
+               const DmgRect* clip = nullptr);
 
 // —— d169 倍速档位弹层（底栏倍速按钮上方；绘制/命中共用同一份几何）——
 // 档位唯一真值：按钮标签 / 弹层条目 / 激活取值共用，禁止散落。

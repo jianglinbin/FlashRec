@@ -344,6 +344,9 @@ int main(int argc, char** argv) {
   // 若托盘装载失败，后面恢复显示。渲染循环对隐藏窗口照常工作。
   // d91：全部显隐一律走 window.hide_window()/show_window() 包装 —— 它们负责
   // 与渲染线程的交换闸门握手，直接调 glfwHideWindow 会踩 Wayland 竞态（见 ledger d91）。
+  // v0.6.1 d342：启动即应用持久化的窗口置顶（ui.always_on_top；Wayland 下
+  // GLFW_FLOATING 可能是 no-op，行为以真机为准，见 d342 验收项）。
+  window.set_floating(cfg.ui_always_on_top);
   window.hide_window();
 
   // d146 R4：启动恢复窗口几何 —— 最新记忆条目的指纹命中当前某块可用屏才恢复
@@ -464,6 +467,10 @@ int main(int argc, char** argv) {
   render.set_show_video_fps(cfg.ui_show_video_fps);
   render.set_show_info(cfg.ui_show_info);
   render.set_cast_auto_fullscreen(cfg.ui_cast_auto_fullscreen);
+  // v0.6.1 d342：窗口置顶勾选初值（渲染线程镜像；窗口侧 set_floating 在 create 后同步）
+  render.set_always_on_top(cfg.ui_always_on_top);
+  // v0.6.1 d346：窗口缩放档位初值 100%（用户体感默认；会话级，不持久化）
+  render.set_zoom(100);
   // d182：皮肤列表交给渲染线程（顶栏 / 右键皮肤弹层）；当前下标 = cfg.skin
   std::vector<std::string> skin_ids, skin_names;
   for (const auto& s : skin_pack) {
@@ -537,6 +544,31 @@ int main(int argc, char** argv) {
 
   // 画中画态（无 chrome，点击画面退出）
   bool pip_mode = false;
+  // v0.6.1 d350：画面缩放/平移状态（渲染侧，窗口不动）——Ctrl+↑↓/Ctrl+滚轮 ±1%
+  //（50–500%，锚点 = 画面中心）；Ctrl+左键拖拽 = 平移画面（手抓画面，查看被裁
+  // 部分）。实现 = mpv `video-zoom` / `video-pan-x|y`（正交于 panscan 填充，
+  // d184/d281）——纯渲染属性，DLNA 直链/AirPlay 回流/HLS 三路径统一生效，
+  // SOAP/GENA/镜像数据流零感知（协议面结论记 d350 台账）。
+  // 会话级：新会话/会话结束重置 100%/零平移（mpv 侧 load_uri 已重置属性，main
+  // 侧经快照边沿同步——见主循环）。100% 时无可平移内容：Ctrl+左键不进 pan。
+  int video_zoom_pct = 100;
+  double video_pan_x = 0.0, video_pan_y = 0.0;
+  bool pan_drag = false;       // Ctrl+左键拖拽进行中（渲染线程冻结舞台手势）
+  float pan_last_x = 0, pan_last_y = 0;
+  bool help_open = false;      // F1 帮助面板（主线程镜像；渲染线程 help_open_ 绘制）
+  // v0.6.1 d342：窗口置顶 —— 主线程唯一真值（初值 = 持久化配置）。画中画恒置顶
+  //（进入时强制 true），但**不再拥有置顶语义**：退出画中画恢复本值而非恒 false
+  //（旧行为会把用户手动开的置顶静默吃掉）。切换入口：右键菜单（经 UiPrefChanged
+  // 意图）/ 托盘勾选 / Ctrl+T —— 后两者直接走 toggle_always_on_top()。
+  bool always_on_top = cfg.ui_always_on_top;
+  // 统一执行：窗口置顶 + 渲染侧勾选镜像回推。落盘由各入口自行决定
+  //（右键菜单走 UiPrefChanged 分支落盘；托盘/快捷键走下方 toggle_always_on_top）。
+  auto apply_always_on_top = [&](bool on) {
+    always_on_top = on;
+    window.set_floating(on || pip_mode);  // 画中画恒置顶，不被手动关闭覆盖
+    render.set_always_on_top(on);
+    cfg.ui_always_on_top = on;  // 运行值同步（Config 对象其余字段不动）
+  };
   bool pip_had_picture = false;                     // 小窗内出现过画面（消失则自动退回大窗）
   int pip_x = 0, pip_y = 0, pip_w = 0, pip_h = 0;   // 进入前窗口矩形
   constexpr int kPipW = 420, kPipH = 236;           // 16:9 小窗
@@ -670,6 +702,21 @@ int main(int argc, char** argv) {
         in.gy = (float)yp;
       }
     }
+    // —— v0.6.1 d350：Ctrl+左键拖拽 = 平移画面（手抓画面 1:1 跟手）——
+    // pan 单位 = viewport 宽高比（mpv video-pan-x|y）；除 zoom 使放大 N 倍时
+    // 拖拽 N 倍距离对应画面同像素位移。方向假设「正 = 画面随鼠标同向移动」，
+    // 符号如与真机体感相反，翻转 dx/dy 符号即可（d350 台账记验证项）。
+    if (pan_drag) {
+      const double dx = (double)x - pan_last_x, dy = (double)y - pan_last_y;
+      pan_last_x = (float)x;
+      pan_last_y = (float)y;
+      const double zf = video_zoom_pct / 100.0;
+      video_pan_x += dx / (double)window.width() / zf;
+      video_pan_y += dy / (double)window.height() / zf;
+      player.set_video_pan(video_pan_x, video_pan_y);
+      publish_wake();
+      return;
+    }
     // —— 统一窗口拖拽（d39）：全局光标锚定跟随（X11 免疫异步 move），纯 GLFW API ——
     // px/py 取当前光标的锚定坐标系坐标（全局成功=屏幕坐标，否则物理换算），数学同构。
     if (win_move_drag) {
@@ -745,9 +792,16 @@ int main(int argc, char** argv) {
     }
     touch();
   };
-  window.on_mouse_btn = [&](int button, int action) {
+  window.on_mouse_btn = [&](int button, int action, int mods) {
     publish_only();           // d36：点击不唤醒面板（动作反馈走 OSD；热区悬停本身已亮面板）
     if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
+      // v0.6.1 d356：Ctrl+中键 = 画面缩放复位 100%（post 意图经 exec_intent 消费；
+      // 不置 down_middle，避免同时触发中键静音）。无修饰中键 = 静音（渲染线程）。
+      if (action == GLFW_PRESS && (mods & GLFW_MOD_CONTROL)) {
+        channel.post_intent(UiIntent{UiIntent::Kind::VideoZoomReset});
+        publish_wake();
+        return;
+      }
       in.down_middle = action == GLFW_PRESS;
       publish_wake();
       return;
@@ -808,6 +862,13 @@ int main(int argc, char** argv) {
     }
     // 统一拖拽结束（d39）：弹起即收
     if (action == GLFW_RELEASE) {
+      // d350：Ctrl+左键拖拽结束（画面平移）——恢复渲染线程舞台手势
+      if (pan_drag) {
+        pan_drag = false;
+        render.set_pan_drag(false);
+        publish_wake();
+        return;
+      }
       if (win_move_drag) {
         win_move_drag = false;
         win_move_system = false;                     // d90：合成器抓取在弹起时自然结束
@@ -829,6 +890,23 @@ int main(int argc, char** argv) {
           WindowGLFW::hit_window_edge(window.logical_width(), window.logical_height(), in.mx, in.my);
       if (e != WindowGLFW::WinEdge::None) {
         win_drag_start_resize(e);
+        publish_wake();
+        return;
+      }
+    }
+    // —— v0.6.1 d350：Ctrl+左键按下 = 画面平移拖拽手势（仅舞台区；顶栏保留
+    // 原交互；边缘带已被上面的缩放判定提前 return 排除）。放大 ≤100% 无被裁
+    // 内容，不进 pan（Ctrl+左键在 100% 时无动作）。——
+    if (in.down && !pip_mode && (mods & GLFW_MOD_CONTROL) && !pan_drag &&
+        video_zoom_pct > 100 && bus.snapshot().has_session) {
+      const float topbar_phys =
+          window.fullscreen() ? 0.f
+                              : theme.layout.topBarH * window.content_scale();
+      if (in.my > topbar_phys) {  // 舞台区（窗口坐标=物理，顶栏占顶部）
+        pan_drag = true;
+        pan_last_x = in.mx;
+        pan_last_y = in.my;
+        render.set_pan_drag(true);  // 渲染线程冻结舞台三态/单击消歧（防误触发播放）
         publish_wake();
         return;
       }
@@ -860,7 +938,8 @@ int main(int argc, char** argv) {
   // 同 value 重复触发续期、value 变化 = 新事件重新淡入（面板宽度随标签变化）。
   auto show_osd = [&](int kind, double value, int dir = 1) {
     const double now = mono_now();
-    const bool panel = kind == 1 || kind == 2;
+    // v0.6.1 d350：kind6（画面缩放）同入持续调节型集合 —— 步进连发防闪烁（d346 同款）。
+    const bool panel = kind == 1 || kind == 2 || kind == 5 || kind == 6;
     const bool renew = in.osd_kind == kind && (panel || in.osd_value == value) &&
                        now - in.osd_at < theme.layout.osdFadeIn + theme.layout.osdHold;
     if (renew) {
@@ -895,6 +974,99 @@ int main(int argc, char** argv) {
     c.volume = v;
     player.on_command(c);
     show_osd(1, v);           // d28：音量 OSD（键/滚轮/拖拽释放共用）
+  };
+  // v0.6.1 d342：置顶切换（托盘勾选 / Ctrl+T 共用；右键菜单走 UiPrefChanged 意图，
+  // 主线程在该分支里单独落盘 —— 勾选态由渲染线程先行翻转，这里只执行 + 回推）。
+  auto toggle_always_on_top = [&]() {
+    apply_always_on_top(!always_on_top);
+    Config::patch(paths::config_file(),
+                  {{"ui", "always_on_top", always_on_top ? "true" : "false"}});
+    show_osd(3, always_on_top ? 8 : 9);  // d32 动作反馈：8 置顶开 9 置顶关（d342）
+    FR_LOG_INFO("[APP] 窗口置顶 = {}（已落盘）", always_on_top);
+  };
+  // v0.6.1 d343/d346：数字键 1/2/3/4 快速缩放 + 步进扩展 —— 目标窗口 = 视频**显示
+  // 尺寸**（SAR 修正，video-out-params/dw/dh）× 档位系数；高 = 舞台高 + 顶栏（复用
+  // 主循环 d281 的 stage 换算口径：窗口模式下舞台 = 窗口高 − topBarH，此处是它的
+  // 逆运算）。守卫：画中画 / 全屏 / 最大化 / 无会话 → 无动作（档位值也不更新——
+  // 菜单勾选与真实窗口保持一致）；超工作区按视频宽高比等比缩小；不持久化（瞬时
+  // 动作；按屏记忆 d146 对任何窗口矩形变化自动生效，无需新逻辑）。
+  // d346 体感扩展（issue #1 追加需求）：zoom_pct 会话级档位真值，默认 100%；
+  //   数字键 1–7 = 快捷档 50/100/150/200/300/400/500%（d354 上限扩展）；
+  //   右键菜单七档入口勾选当前档。缩放百分比会话内连续（步进的
+  //   基准是上次结果），重启回默认 100%（不持久化）。
+  int zoom_pct = 100;
+  auto set_zoom = [&](int pct) {
+    pct = std::clamp(pct, 50, 500);
+    // v0.6.1 d357：画中画同样生效（用户需求）——数字键 1–7 在小窗内缩放窗口；
+    // 全屏/最大化仍排除（窗口矩形由系统管理）。右键菜单在画中画本就不弹
+    //（渲染线程进小窗即收弹层），数字键是唯一入口，语义自洽。
+    if (window.fullscreen() || window.maximized()) return;
+    if (!bus.snapshot().has_session) return;
+    int vw = 0, vh = 0;
+    if (!player.video_display_size(&vw, &vh) || vw <= 0 || vh <= 0) return;
+    // PotPlayer 语义（d348 搜索核实）：百分比锚定**视频输出尺寸**，100% =
+    // pixel for pixel（画面逐像素等于视频），超屏 cap 到显示器。
+    // ★口径全部走**物理像素**：视频显示尺寸是物理像素；顶栏 token topBarH 是
+    // 逻辑像素，必须乘 DPI 换算成物理——否则高 DPI 下（如 1.5x，顶栏实际占
+    // 60 物理像素而只加了 40）舞台比目标矮 → 画面被 contain 缩小，100% 永远
+    // 达不到逐像素（实测 1080p@1.5x 偏差 ~2%）。窗口尺寸经
+    // set_window_size_physical 下发（Wayland 逻辑单位在后端内部换算）。
+    // ★d357：画中画不画顶栏（render_loop topbar_shown=false），top_h 记 0 ——
+    // 否则小窗高度凭空多一份顶栏 token，100% 又对不上逐像素。
+    const double top_h = pip_mode ? 0.0
+                                  : (double)theme.layout.topBarH * (double)window.content_scale();
+    double ww = (double)vw * pct / 100.0;
+    double wh = (double)vh * pct / 100.0 + top_h;
+    // 夹取到所在屏工作区（保持视频宽高比；顶栏高度不参与比例缩放）。
+    MonitorInfo ms[8];
+    const int n = collect_monitors(ms, 8);
+    const int cur = window.monitor_index_of_window();
+    int nx = 0, ny = 0;
+    bool have_pos = false;
+    for (int i = 0; i < n; ++i) {
+      if (ms[i].idx != cur) continue;
+      const double avail_w = (double)ms[i].aw;
+      const double avail_h = (double)ms[i].ah - top_h;
+      if (ww > avail_w || wh - top_h > avail_h) {
+        const double k = std::min(avail_w / ww, avail_h / (wh - top_h));
+        ww *= k;
+        wh = (wh - top_h) * k + top_h;
+      }
+      // 位置：窗口完整落在工作区内（Wayland 下 set_pos 是空操作，仅 X11/Win 生效）
+      int cx = 0, cy = 0, cw = 0, ch = 0;
+      window.pos_size(&cx, &cy, &cw, &ch);
+      nx = std::clamp(cx, ms[i].ax, std::max(ms[i].ax, ms[i].ax + ms[i].aw - (int)ww));
+      ny = std::clamp(cy, ms[i].ay, std::max(ms[i].ay, ms[i].ay + ms[i].ah - (int)wh));
+      have_pos = true;
+      break;
+    }
+    ww = std::max(ww, (double)kWinMinW);
+    wh = std::max(wh, (double)kWinMinH);
+    if (have_pos) window.set_pos(nx, ny);
+    window.set_window_size_physical((int)ww, (int)wh);
+    zoom_pct = pct;
+    render.set_zoom(pct);      // d346：菜单勾选镜像回推
+    show_osd(5, (double)pct);  // d343/d346：缩放反馈面板（kind5，「窗口 100%」）
+    FR_LOG_INFO("[APP] 窗口缩放 {}% → {}x{}（物理，含顶栏 {:.0f}）", pct, (int)ww, (int)wh,
+                top_h);
+  };
+  // v0.6.1 d350：画面缩放统一入口：clamp 50–500 → mpv video-zoom → OSD kind6。
+  // ★d351 修正映射：mpv video-zoom 是 2 的幂指数标度（0=适配基准，1=2 倍，-1=半），
+  // d350 误按线性倍率直传（100% → 1.0 = 放大 2 倍、50% → 0.5 仍 1.41 倍），用户
+  // 实测「100% 已放大、50% 不缩小」即此因。现统一 log2 换算：100% → 0（原大）。
+  // 缩回 100% 时平移归零（无内容可平移）。不持久化（会话级，重置见主循环边沿）。
+  auto set_video_zoom = [&](int pct) {
+    pct = std::clamp(pct, 50, 500);
+    if (!bus.snapshot().has_session) return;
+    video_zoom_pct = pct;
+    const double z = std::log2(pct / 100.0);
+    player.set_video_zoom(z);
+    if (pct == 100 && (video_pan_x != 0.0 || video_pan_y != 0.0)) {
+      video_pan_x = video_pan_y = 0.0;
+      player.set_video_pan(0.0, 0.0);
+    }
+    show_osd(6, (double)pct);  // d350：画面缩放反馈（kind6，「画面 N%」）
+    FR_LOG_INFO("[APP] 画面缩放 {}%（video-zoom={:+.3f}）", pct, z);
   };
   // 键盘拖动进度状态（d29）：左右键按住 = 进度条动 + 预览，**不 seek**；抬起才提交
   bool kb_progress = false;
@@ -948,8 +1120,22 @@ int main(int argc, char** argv) {
     publish_only();
     switch (key) {
       case GLFW_KEY_SPACE:   play_pause(); break;
-      case GLFW_KEY_UP:      nudge_volume(+5); break;
-      case GLFW_KEY_DOWN:    nudge_volume(-5); break;
+      case GLFW_KEY_UP:
+        // v0.6.1 d350：Ctrl+↑ = 画面缩放步进（50–500，中心放大；窗口不动）；
+        // 无修饰 = 音量 +5（原行为）。d346 的窗口缩放改由数字键/右键菜单承担。
+        // d352：步进 1% → 10%（用户体感：1% 太细，滚轮一格一眼看不出变化）。
+        if (mods & GLFW_MOD_CONTROL) set_video_zoom(video_zoom_pct + 10);
+        else nudge_volume(+5);
+        break;
+      case GLFW_KEY_DOWN:
+        if (mods & GLFW_MOD_CONTROL) set_video_zoom(video_zoom_pct - 10);
+        else nudge_volume(-5);
+        break;
+      case GLFW_KEY_F1:
+        // v0.6.1 d350：F1 = 帮助面板开关（全部快捷键一览；再按 F1/点击/ESC 关闭）
+        channel.post_intent(UiIntent{UiIntent::Kind::ToggleHelp});
+        publish_wake();
+        break;
       case GLFW_KEY_ENTER:
       case GLFW_KEY_KP_ENTER:
         if (mods & GLFW_MOD_CONTROL) {
@@ -958,8 +1144,12 @@ int main(int argc, char** argv) {
         }
         break;
       case GLFW_KEY_ESCAPE:
-        // 全屏 / 画中画态：ESC = 回窗口模式（d29 用户定值）；普通窗口态仍为关闭
-        if (pip_mode) {
+        // v0.6.1 d350：帮助面板开着 → ESC 先关帮助（分层收起，同子菜单语义）
+        if (help_open) {
+          help_open = false;
+          render.set_help(false);
+          publish_wake();
+        } else if (pip_mode) {
           show_osd(3, 6);                             // d32：退出画中画反馈
           channel.post_intent(UiIntent{UiIntent::Kind::Pip});
           publish_wake();
@@ -971,13 +1161,38 @@ int main(int argc, char** argv) {
           render.request_menu_dismiss();
         }
         break;
+      case GLFW_KEY_T:
+        // v0.6.1 d342：Ctrl+T = 切换窗口置顶（与托盘勾选同管线）
+        if (mods & GLFW_MOD_CONTROL) toggle_always_on_top();
+        break;
+      case GLFW_KEY_1:
+      case GLFW_KEY_2:
+      case GLFW_KEY_3:
+      case GLFW_KEY_4:
+      case GLFW_KEY_5:
+      case GLFW_KEY_6:
+      case GLFW_KEY_7:
+        // v0.6.1 d343/d346：数字键快捷档 = 视频显示尺寸的 50–500%（PotPlayer
+        // 语义；d354 扩展到七档 1–7；守卫见 set_zoom —— 画中画/全屏/最大化/无
+        // 会话无动作）
+        set_zoom(key == GLFW_KEY_1 ? 50 : key == GLFW_KEY_2 ? 100
+                 : key == GLFW_KEY_3 ? 150 : key == GLFW_KEY_4 ? 200
+                 : key == GLFW_KEY_5 ? 300 : key == GLFW_KEY_6 ? 400 : 500);
+        break;
       default: break;
     }
   };
   // 滚轮 → 音量（d25：一格 ±5，与方向键同步长，任意位置可用）；d36 不唤醒面板
-  window.on_scroll = [&](double, double y) {
+  // v0.6.1 d350：Ctrl+滚轮 = 画面缩放步进（50–500，中心放大；窗口不动，
+  // 与 Ctrl+↑↓ 同粒度；d352：步进改 10%）；无修饰键 = 音量（原行为）。mods 由
+  // window_glfw 的 scroll 回调用 glfwGetKey 现查（d346）。
+  window.on_scroll = [&](double, double y, int mods) {
     publish_only();
     if (y == 0) return;
+    if (mods & GLFW_MOD_CONTROL) {
+      set_video_zoom(video_zoom_pct + (y > 0 ? 10 : -10));
+      return;
+    }
     nudge_volume(y > 0 ? +5 : -5);
   };
   // 系统请求重绘（模态循环内唯一出帧通道）：v0.4.0 d56 起升级为全窗重绘请求
@@ -1107,9 +1322,11 @@ int main(int argc, char** argv) {
       case UiIntent::Kind::Pip: {
         if (pip_mode) {
           // 退出小窗：还原矩形与置顶
+          // v0.6.1 d342：置顶恢复 always_on_top 用户真值，而非恒 false —— 旧行为
+          // 会把用户手动开的置顶在退画中画时静默吃掉。
           pip_mode = false;
           render.set_pip(false);
-          window.set_floating(false);
+          window.set_floating(always_on_top);
           window.set_pos(pip_x, pip_y);
           window.set_window_size(pip_w, pip_h);
           show_osd(3, 6);                           // d32：退出画中画反馈
@@ -1189,6 +1406,41 @@ int main(int argc, char** argv) {
       case UiIntent::Kind::SkinChanged:  // d182
         apply_skin((int)std::lround(it.value));
         break;
+      case UiIntent::Kind::WindowZoom:
+        // v0.6.1 d346：右键菜单缩放档位（value = 百分比 50..500）。档位真值在
+        // 主线程 zoom_pct，set_zoom 内部守卫可能拒绝（守卫态下窗口与档位不动），
+        // 菜单勾选经 set_zoom → render.set_zoom 回推后自然对齐。
+        set_zoom((int)std::lround(it.value));
+        break;
+      case UiIntent::Kind::DecodeMode:
+        // v0.6.1 d353：解码方式选择（右键「解码」子菜单；value = 0 软解/1 自动/
+        // 2 NVDEC/3 DXVA2）。d352 二值开关升级：真机证实 auto-safe 选中的
+        // d3d11va-copy（本机双显卡，疑走 Intel 核显）花屏，提供 NVDEC（RTX 3080
+        // 专用解码器）/DXVA2 备选。重载会重置渲染属性 → 按当前画面缩放/平移重放。
+        {
+          const int m = (int)std::lround(it.value);
+          player.set_hwdec_mode(m);
+          player.set_video_zoom(std::log2(video_zoom_pct / 100.0));
+          player.set_video_pan(video_pan_x, video_pan_y);
+          show_osd(3, m == 1 ? 10 : m == 0 ? 11 : m == 2 ? 12 : 13);
+          FR_LOG_WARN("[APP] 解码方式 → {}（按位重载续播）",
+                      m == 0 ? "软解" : m == 1 ? "自动" : m == 2 ? "NVDEC" : "DXVA2");
+        }
+        break;
+      case UiIntent::Kind::VideoZoomReset:
+        // v0.6.1 d356：Ctrl+中键 = 画面缩放复位 100%（set_video_zoom 内含平移
+        // 归零 + OSD kind6 + 无会话守卫；on_mouse_btn 在此之前定义，故经意图
+        // 通道中转——lambda 前向引用坑第三次，d342/d350 同款）。
+        set_video_zoom(100);
+        break;
+      case UiIntent::Kind::ToggleHelp:
+        // v0.6.1 d350：F1 帮助面板（F1/点击面板 → 统一经此切换，主线程持镜像）
+        help_open = !help_open;
+        render.set_help(help_open);
+        // 帮助与其它浮层互斥：开帮助时收右键菜单（渲染线程 set_help 内连带）
+        FR_LOG_INFO("[APP] 帮助面板 = {}", help_open);
+        publish_wake();
+        break;
       case UiIntent::Kind::Speed: {
         // d169：倍速选择 —— 落盘 player.speed、下发播放器、OSD 反馈。
         cfg.player_speed = it.value;
@@ -1247,6 +1499,15 @@ int main(int argc, char** argv) {
                         {{"ui", "cast_auto_fullscreen", it.flag ? "true" : "false"}});
           render.set_cast_auto_fullscreen(it.flag);
           FR_LOG_INFO("[APP] 投屏自动全屏 = {}（已落盘）", it.flag);
+        } else if (it.pref == (int)UiIntent::UiPref::AlwaysOnTop) {
+          // v0.6.1 d342：窗口置顶（右键菜单入口）。渲染线程已翻转勾选镜像，这里
+          // 执行 + 落盘；apply_always_on_top 会把真值经 set_always_on_top 回推
+          //（与渲染线程本地翻转结果一致，幂等）。
+          apply_always_on_top(it.flag);
+          Config::patch(paths::config_file(),
+                        {{"ui", "always_on_top", it.flag ? "true" : "false"}});
+          show_osd(3, it.flag ? 8 : 9);  // d32 动作反馈：8 置顶开 9 置顶关（d342）
+          FR_LOG_INFO("[APP] 窗口置顶 = {}（已落盘）", it.flag);
         }
         break;
     }
@@ -1324,6 +1585,14 @@ int main(int argc, char** argv) {
                 nx.id = 3;
                 nx.label = "下一集";
                 items.push_back(nx);
+                // v0.6.1 d342：窗口置顶勾选项（与右键菜单同真值 always_on_top）
+                {
+                  TrayMenuItem top;
+                  top.id = 4;
+                  top.label = "窗口置顶";
+                  top.checked = always_on_top;
+                  items.push_back(top);
+                }
                 items.push_back(TrayMenuItem::Sep());
                 {  // d146 R4：投屏窗口 —— 每块可用屏一项（选屏判断失手时的人工兜底硬保障）
                   MonitorInfo ms[8];
@@ -1364,6 +1633,9 @@ int main(int argc, char** argv) {
                     break;
                   case 3:
                     exec_intent({UiIntent::Kind::Next});
+                    break;
+                  case 4:  // v0.6.1 d342：托盘切换窗口置顶（toggle_always_on_top 内含落盘+OSD）
+                    toggle_always_on_top();
                     break;
                   case -1:  // 退出：统一走 on_quit_request（隐窗 + 置关闭，d117）
                     if (window.on_quit_request) window.on_quit_request();
@@ -1592,6 +1864,22 @@ int main(int argc, char** argv) {
         snap_cache = snap;
         snap_ver_seen = ver;
       }
+    }
+    // v0.6.1 d350：会话边沿 → 画面缩放/平移重置（mpv 侧 load_uri 已重置属性，
+    // 这里同步 main 侧状态）。会话从无到有、或会话内 URI 变化（新投屏接管/
+    // 下一集）都算新会话；暂停/恢复/进度更新不触发。
+    {
+      static bool prev_session = false;
+      static std::string prev_uri;
+      if ((snap.has_session != prev_session ||
+           (snap.has_session && snap.uri != prev_uri)) &&
+          (video_zoom_pct != 100 || video_pan_x != 0.0 || video_pan_y != 0.0)) {
+        video_zoom_pct = 100;
+        video_pan_x = video_pan_y = 0.0;
+        FR_LOG_INFO("[APP] 会话变化 → 画面缩放重置 100%");
+      }
+      prev_session = snap.has_session;
+      prev_uri = snap.uri;
     }
     {
       const bool has_picture = snap.picture_ready && !snap.uri.empty();

@@ -128,6 +128,19 @@ class MpvBridge {
   void set_speed(double s);  // d169：倍速（mpv speed 属性；1.0 = 原速）
   // d184：视频填充 —— cover=1（短边填满/居中/裁切，不变型无空白）/ contain=0（留黑边）
   void set_panscan(double p);
+  // v0.6.1 d350：画面缩放（mpv `video-zoom`，**2^z 标度**：0=适配基准，1=2 倍，-1=半）
+  // 与平移（`video-pan-x/y`，viewport 比例单位）。渲染侧属性：与 panscan（d184/d281）
+  // 正交叠加；三数据路径（DLNA 直链/AirPlay 回流/HLS）统一生效，协议面零感知。
+  // load_uri 时重置（会话级）。d351 修正口径：入参为 mpv 原生标度（2 的幂指数），
+  // 百分比换算（log2）由调用方完成。
+  void set_video_zoom(double z);
+  void set_video_pan(double x, double y);
+  // v0.6.1 d353：解码方式选择（右键「解码」子菜单）。0 软解 no / 1 自动
+  // auto-safe / 2 NVDEC nvdec-copy / 3 DXVA2 dxva2-copy。双显卡机（Intel 核显 +
+  // NVIDIA）auto-safe 常选中核显 d3d11va-copy 且真机证实其花屏，NVDEC 走
+  // RTX 专用解码器为首选备选。对已加载流属性不保证即时生效（d151 教训），
+  // 有会话时按位重载续播。
+  void set_hwdec_mode(int mode);
   // d196：letterbox/留边底色 = 皮肤 stageBg（mpv background-color）。不设的话 contain 时
   // 留边恒为 mpv 默认黑，与浅色/彩色皮肤冲突。
   void set_background_color(const std::string& rgb_hex);
@@ -141,12 +154,19 @@ class MpvBridge {
   double get_video_fps();
   // d45：视频信息整包查询（帧率/码率/分辨率），mpv_get_property 逐项、缺项回 -1。
   VideoStats get_video_stats();
+  // v0.6.1 d343：视频**显示**尺寸（含 SAR/PAR 修正）。首选 video-out-params/dw/dh
+  //（mpv 已按显示口径算好）；取不到回退 width × video-params/aspect 估算；再不行
+  // 返回 false。解码 width/height 对 SAR≠1 的流（AirPlay 镜像）会算错，勿用。
+  bool video_display_size(int* w, int* h);
   bool valid() const { return mpv_ != nullptr; }
 
  private:
   // d125：建软件渲染上下文（关硬解 + MPV_RENDER_API_TYPE_SW）。
   // 由 init_render（已知 GL 不可用时直接起步）与 switch_to_software_if_needed 共用。
   bool create_sw_context();
+  // v0.6.1 d352：按位重载当前流续播（位置/暂停态从 mpv 现取）。后端降级与解码
+  // 切换共用；重载前不设任何门槛，由调用方自行判断是否需要。
+  bool reload_current_preserve_pos();
 
   struct mpv_handle* mpv_ = nullptr;
   // GL 或 SW 二选一的渲染上下文（切换后端时先 free 再重建，同一指针复用）
@@ -171,6 +191,10 @@ class MpvBridge {
   std::string last_uri_;
   // d184：视频填充（panscan）= cover|contain 映射；load 时应用。
   double panscan_ = 1.0;
+  // d350：画面缩放/平移（渲染侧会话级状态；load 时重置）。
+  double video_zoom_ = 1.0;
+  double video_pan_x_ = 0.0;
+  double video_pan_y_ = 0.0;
   // d196：留边底色 "#rrggbb"；load 时应用。
   std::string bg_color_ = "#000000";
 };

@@ -17,6 +17,7 @@
     "show_fps": false,
     "show_video_fps": false,
     "cast_auto_fullscreen": false,
+    "always_on_top": false,
     "window": {
       "prefer": "last",
       "monitors": []

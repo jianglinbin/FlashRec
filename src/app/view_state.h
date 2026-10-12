@@ -60,9 +60,14 @@ struct UiIntent {
     UiPrefChanged,  // R1：右键菜单勾选项变化 → 主线程落盘 settings.json
     Speed,          // d169：倍速选择（value = 倍速；主线程落盘 + 下发给播放器）
     SkinChanged,    // d182：皮肤选择（value = 皮肤列表下标；主线程换肤 + 持久化）
+    WindowZoom,     // v0.6.1 d346：窗口缩放档位（右键菜单；value = 百分比 50..500 整数，d354 上限扩展）
+    ToggleHelp,     // v0.6.1 d350：F1 帮助面板开关（F1/点击面板 → 统一经意图切换）
+    DecodeMode,     // v0.6.1 d353：解码方式（右键子菜单；value = 0 软解/1 自动/2 NVDEC/3 DXVA2）
+    VideoZoomReset,  // v0.6.1 d356：画面缩放复位 100%（Ctrl+中键；平移一并归零）
   };
   // R1：可持久化 UI 偏好 id（UiPrefChanged 的 pref 载荷；与 settings.json 键一一对应）
-  enum class UiPref { ShowInfo = 1, CastAutoFullscreen };
+  // v0.6.1 d342：AlwaysOnTop = ui.always_on_top（窗口置顶，独立于画中画）。
+  enum class UiPref { ShowInfo = 1, CastAutoFullscreen, AlwaysOnTop };
   // d68：DragMove 的来源区域（§2「指令恒产生，消费与否由主线程按区域决定」）。
   // 目前唯一消费者 = TopBar（窗口移动/最大化拖还原跟手）；Stage/Widget 仅表示
   // 「拖动已被三态机识别」，主线程收到即丢弃（无消费者区域可不响应）。

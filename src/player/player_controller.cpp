@@ -298,6 +298,25 @@ bool PlayerController::init_render(void* (*get_proc)(void* user, const char* nam
 
 VideoStats PlayerController::video_stats() { return mpv_ ? mpv_->get_video_stats() : VideoStats{}; }
 
+// v0.6.1 d343：视频显示尺寸转发（数字键缩放档位）。mpv 未就绪/无视频 = false。
+bool PlayerController::video_display_size(int* w, int* h) {
+  return mpv_ && mpv_->video_display_size(w, h);
+}
+
+// v0.6.1 d350：画面缩放/平移转发（数字键/菜单窗口缩放之外的渲染侧能力）。
+void PlayerController::set_video_zoom(double z) {
+  if (mpv_) mpv_->set_video_zoom(z);
+}
+
+void PlayerController::set_video_pan(double x, double y) {
+  if (mpv_) mpv_->set_video_pan(x, y);
+}
+
+// v0.6.1 d353：解码方式选择转发（mpv API 收口规则）。
+void PlayerController::set_hwdec_mode(int mode) {
+  if (mpv_) mpv_->set_hwdec_mode(mode);
+}
+
 void PlayerController::set_panscan(double p) {
   if (mpv_) mpv_->set_panscan(p);
 }

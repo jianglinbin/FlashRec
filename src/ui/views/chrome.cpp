@@ -527,6 +527,12 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
         case 5: label = "画中画"; break;
         case 6: label = "退出画中画"; break;
         case 7: label = "停止"; break;
+        case 8: label = "窗口置顶 开"; break;  // v0.6.1 d342：置顶反馈
+        case 9: label = "窗口置顶 关"; break;  // v0.6.1 d342
+        case 10: label = "解码 · 自动"; break;      // v0.6.1 d353：解码选择反馈
+        case 11: label = "解码 · 软解"; break;      // v0.6.1 d353
+        case 12: label = "解码 · NVDEC"; break;     // v0.6.1 d353
+        case 13: label = "解码 · DXVA2"; break;     // v0.6.1 d353
         default: label = ""; break;
       }
     }
@@ -547,6 +553,11 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
       else if (id == 3 || id == 4) icon_fullscreen(vg, icon_cx, cy, L.osdActIconR * s, t.icon);
       else if (id == 5 || id == 6) icon_pip(vg, icon_cx, cy, L.osdActIconR * s, t.icon);
       else if (id == 7) icon_stop(vg, icon_cx, cy, L.osdIconR * s, t.icon);
+      // v0.6.1 d342：置顶无专用图标资产，v1 复用画中画图标（同为"小窗悬浮"意象）；
+      // 语义由文字标签（"窗口置顶 开/关"）区分。d352：解码切换（10/11）同样无
+      // 专用图标，沿此先例复用画中画图标，文字标签区分。
+      else if (id == 8 || id == 9) icon_pip(vg, icon_cx, cy, L.osdActIconR * s, t.icon);
+      else if (id >= 10 && id <= 13) icon_pip(vg, icon_cx, cy, L.osdActIconR * s, t.icon);
     }
 
     text(vg, t, icon_cx + icon_half + gap, cy, L.osdFont * s, t.subText, label,
@@ -563,10 +574,115 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
     rounded_rect(vg, px, py, pw, ph, L.osdRadius * s, t.barBg);
     text(vg, t, px + pw * 0.5f, py + ph * 0.5f, L.osdFont * s, t.subText, label.c_str(),
          NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+  } else if (in.osd_kind == 5) {
+    // —— 窗口缩放反馈（v0.6.1 d343）：横向面板，居中显示「窗口 100%」；无图标 ——
+    // 照 kind4 骨架（同一 token 集，零新增 layout token）；osd_value = 缩放百分比
+    //（50/100/150/200，数字键 1–4 触发）。
+    const float px = L.osdEdgeGap;
+    const float py = L.osdTopGap;
+    const float s = std::min(1.f, h * L.osdMaxHRatio / L.osdSeekH);
+    const float ph = L.osdSeekH * s;
+    const std::string label =
+        "窗口 " + std::to_string((int)(in.osd_value + 0.5)) + "%";
+    const float tw = text_width(vg, L.osdFont * s, label.c_str());
+    const float pw = tw + L.osdSpeedPad * s;
+    rounded_rect(vg, px, py, pw, ph, L.osdRadius * s, t.barBg);
+    text(vg, t, px + pw * 0.5f, py + ph * 0.5f, L.osdFont * s, t.subText, label.c_str(),
+         NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+  } else if (in.osd_kind == 6) {
+    // —— 画面缩放反馈（v0.6.1 d350）：照 kind5 骨架，label 区分「画面 N%」——
+    // Ctrl+↑↓/Ctrl+滚轮步进（50–500%、步进 10%，中心放大）；窗口尺寸不变。
+    const float px = L.osdEdgeGap;
+    const float py = L.osdTopGap;
+    const float s = std::min(1.f, h * L.osdMaxHRatio / L.osdSeekH);
+    const float ph = L.osdSeekH * s;
+    const std::string label =
+        "画面 " + std::to_string((int)(in.osd_value + 0.5)) + "%";
+    const float tw = text_width(vg, L.osdFont * s, label.c_str());
+    const float pw = tw + L.osdSpeedPad * s;
+    rounded_rect(vg, px, py, pw, ph, L.osdRadius * s, t.barBg);
+    text(vg, t, px + pw * 0.5f, py + ph * 0.5f, L.osdFont * s, t.subText, label.c_str(),
+         NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
   }
   nvgGlobalAlpha(vg, 1.f);
 }
 
+// —— 右键上下文菜单（d45）——
+// 几何常量说明：菜单是临时浮层，尺寸常量取现有 token 就近组合（osdRadius 面板圆角 /
+// badgeRadius 悬停条圆角 / titleFont 条目字号），不为它新增 layout token。
+
+// —— v0.6.1 d350：F1 帮助面板（全屏遮罩 + 居中卡片）——
+// 快捷键两列清单（左 = 动作、右 = 键位）。纯展示无 hit-test；尺寸常量照菜单
+// 惯例取现有 token 组合，不新增 layout token。新增快捷键时同步维护此表。
+void draw_help(NVGcontext* vg, const Theme& t, float win_w, float win_h,
+               const DmgRect* clip) {
+  struct HelpRow {
+    const char* action;  // 动作
+    const char* keys;    // 键位
+  };
+  static constexpr HelpRow kRows[] = {
+      {"播放 / 暂停", "Space"},
+      {"音量 + / -", "↑ / ↓ / 滚轮"},
+      {"静音切换", "鼠标中键"},
+      {"进度（按住拖动）", "← / →"},
+      {"全屏切换", "双击 / Ctrl+Enter"},
+      {"退出全屏 / 画中画", "Esc"},
+      {"窗口置顶", "Ctrl+T / 右键菜单"},
+      {"窗口大小 50–500%（七档）", "1–7"},
+      {"画面缩放（步进 10%）", "Ctrl+↑↓ / Ctrl+滚轮"},
+      {"画面平移（放大后拖看）", "Ctrl+左键拖拽"},
+      {"画面缩放复位 100%", "Ctrl+中键"},
+      {"帮助面板", "F1"},
+  };
+  constexpr int kN = (int)(sizeof(kRows) / sizeof(kRows[0]));
+  const auto& L = t.layout;
+  if (clip && !dmg_hit(clip, 0.f, 0.f, win_w, win_h)) return;
+
+  // 全屏遮罩（压暗底层；不拦 ESC/点击——关闭逻辑在 render_loop）
+  nvgGlobalAlpha(vg, 0.55f);
+  nvgBeginPath(vg);
+  nvgRect(vg, 0.f, 0.f, win_w, win_h);
+  nvgFillColor(vg, nvgRGBA(0x00, 0x00, 0x00, 160));
+  nvgFill(vg);
+  nvgGlobalAlpha(vg, 1.f);
+
+  // 居中卡片：行数驱动高度；字号/间距照菜单惯例（titleFont 行、osdRadius 圆角）
+  const float font = L.titleFont;
+  const float row_h = font * 1.9f;
+  const float pad = font * 1.1f;
+  const float col_gap = font * 2.2f;
+  float act_w = 0.f, key_w = 0.f;
+  for (const auto& r : kRows) {
+    act_w = std::max(act_w, text_width(vg, font, r.action));
+    key_w = std::max(key_w, text_width(vg, font, r.keys));
+  }
+  const float card_w = pad * 2.f + act_w + col_gap + key_w;
+  const float title_h = font * 2.1f;
+  const float card_h = title_h + kN * row_h + pad;
+  const float cx0 = std::round((win_w - card_w) * 0.5f);
+  const float cy0 = std::round((win_h - card_h) * 0.5f);
+  rounded_rect(vg, cx0, cy0, card_w, card_h, L.ctxRadius, t.barBg);
+
+  // 标题
+  text(vg, t, cx0 + card_w * 0.5f, cy0 + title_h * 0.55f, font, t.icon,
+       "快捷键（F1 关闭）", NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+  // 分隔线
+  nvgBeginPath(vg);
+  nvgMoveTo(vg, cx0 + pad, cy0 + title_h);
+  nvgLineTo(vg, cx0 + card_w - pad, cy0 + title_h);
+  nvgStrokeColor(vg, t.track);
+  nvgStrokeWidth(vg, 1.f);
+  nvgStroke(vg);
+  // 行：左动作（subText）右键位（icon，右对齐）
+  float y = cy0 + title_h + row_h * 0.5f;
+  for (const auto& r : kRows) {
+    text(vg, t, cx0 + pad, y, font, t.subText, r.action,
+         NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+    text(vg, t, cx0 + card_w - pad, y, font, t.icon, r.keys,
+         NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
+    y += row_h;
+  }
+}
 // —— 右键上下文菜单（d45）——
 // 几何常量说明：菜单是临时浮层，尺寸常量取现有 token 就近组合（osdRadius 面板圆角 /
 // badgeRadius 悬停条圆角 / titleFont 条目字号），不为它新增 layout token。
@@ -642,6 +758,19 @@ void draw_ctx_menu(NVGcontext* vg, const Theme& t, const CtxMenuLayout& lay,
     // mutedText(#9aa0aa) 与 subText(#babec6) 太接近，视觉上分不出禁用态（d45 用户实测）
     const NVGcolor col = items[i].enabled ? (hov ? t.icon : t.subText) : t.iconDisabled;
     text(vg, t, lay.x + L.ctxPadX + L.ctxCheckW, cy, L.titleFont, col, items[i].label);
+    // v0.6.1 d347：二级子菜单父条目 —— 右缘画 ▸（手绘两段线，同 ✓ 不依赖字形；
+    // 颜色随 hover 与文本一致；宽度借 ctxRightPad 区，几何不改）。
+    if (items[i].sub) {
+      const float ax0 = lay.x + lay.w - L.ctxRightPad * 0.75f;
+      nvgBeginPath(vg);
+      nvgMoveTo(vg, ax0, cy - 4.f);
+      nvgLineTo(vg, ax0 + 4.f, cy);
+      nvgLineTo(vg, ax0, cy + 4.f);
+      nvgStrokeColor(vg, col);
+      nvgStrokeWidth(vg, 2.f);
+      nvgLineCap(vg, NVG_ROUND);
+      nvgStroke(vg);
+    }
   }
 }
 

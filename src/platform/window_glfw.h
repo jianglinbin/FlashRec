@@ -98,6 +98,10 @@ class WindowGLFW {
   void toggle_fullscreen();        // 全屏切换（保存/恢复原矩形）
   void set_floating(bool on);      // 置顶（画中画）
   void set_window_size(int w, int h);
+  // v0.6.1 d348：按**物理像素**设窗口尺寸。缩放档位以视频显示尺寸（物理）为锚，
+  // 而 glfwSetWindowSize 的单位随平台不同（Win32/X11 = 物理；Wayland = 逻辑），
+  // 换算收口在此（规则 5：平台差异不出 platform/）。
+  void set_window_size_physical(int w, int h);
   void set_pos(int x, int y);
   void pos_size(int* x, int* y, int* w, int* h) const;   // 窗口坐标/尺寸（屏幕坐标）
   void move_to_workarea_corner(int w, int h);            // 工作区（避开任务栏）右下角
@@ -142,10 +146,14 @@ class WindowGLFW {
 
   // —— 交互回调（主线程内由 GLFW 投递）——
   std::function<void(double, double)> on_mouse_move;          // 窗口坐标
-  std::function<void(int button, int action)> on_mouse_btn;   // button: 0=左 1=中 2=右（GLFW 枚举）
-                                                              // action: 1=press 0=release
+  std::function<void(int button, int action, int mods)> on_mouse_btn;  // button: 0=左 1=中 2=右；
+                                                                // action: 1=press 0=release；
+                                                                // mods 含 Ctrl/Shift/Alt（d350）
   std::function<void(int key, int action, int mods)> on_key;   // mods 含 Ctrl/Shift/Alt/Super
-  std::function<void(double, double)> on_scroll;               // x/y：滚动增量（y>0=向上）
+  std::function<void(double x, double y, int mods)> on_scroll;  // x/y：滚动增量（y>0=向上）；
+                                                                // mods 含 Ctrl/Shift/Alt（v0.6.1 d346：
+                                                                // Ctrl+滚轮 = 窗口缩放步进；GLFW scroll
+                                                                // 回调不自带修饰键，用 glfwGetKey 读）
   std::function<void(bool)> on_mouse_enter;                    // true=进入窗口 false=离开（d36）
   std::function<void()> on_focus_lost;
 

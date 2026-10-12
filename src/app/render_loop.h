@@ -122,6 +122,65 @@ class RenderLoop {
   // 本地置位并回投 UiPrefChanged，主线程落盘 + 管线读取走 cfg）
   void set_cast_auto_fullscreen(bool on) { cast_auto_fs_ = on; }
   bool cast_auto_fs_ = false;  // 右键菜单「投屏自动全屏」勾选态（渲染线程自有）
+  // v0.6.1 d342：窗口置顶勾选态（右键菜单）。同 cast_auto_fs_ 模式：主线程启动设
+  // 初值；渲染线程勾选即本地翻转 + 回投 UiPrefChanged，主线程执行 set_floating、
+  // 落盘并经本 setter 回推真值（托盘/快捷键入口不经渲染线程翻转，只回推）。
+  void set_always_on_top(bool on) {
+    always_on_top_ = on;
+    force_dirty_.store(true, std::memory_order_release);
+  }
+  bool always_on_top_ = false;  // 右键菜单「窗口置顶」勾选态（渲染线程自有镜像）
+  // v0.6.1 d346：窗口缩放档位镜像（右键菜单四档勾选）。主线程 set_zoom 时回推；
+  // 步进（Ctrl+↑↓/滚轮）与数字键同样经它同步。初值 100 = 默认档（用户体感定值）。
+  // v0.6.1 d350：Ctrl 分流改「画面缩放」（video-zoom），窗口档位仅数字键/菜单。
+  void set_zoom(int pct) {
+    zoom_pct_ = pct;
+    force_dirty_.store(true, std::memory_order_release);
+  }
+  int zoom_pct_ = 100;
+  // v0.6.1 d350：Ctrl+左键拖拽 = 画面平移进行中（主线程手势状态广播）。
+  // 渲染线程据此冻结舞台三态机/单击消歧（拖拽期间点击不得误判成播放/暂停）。
+  void set_pan_drag(bool on) {
+    pan_drag_ = on;
+    force_dirty_.store(true, std::memory_order_release);
+  }
+  // v0.6.1 d350：F1 帮助面板（全部快捷键一览）。开时全屏遮罩 + 居中卡片，
+  // 点击面板/F1/ESC 关闭（点击经 ToggleHelp 意图回主线程统一翻转镜像）。
+  // 与右键菜单/倍速/皮肤弹层互斥（开帮助连带关闭）。
+  void set_help(bool on) {
+    help_open_ = on;
+    if (on) {
+      ctx_open_ = false;
+      close_ctx_sub();
+      speed_open_ = false;
+      skin_open_ = false;
+    }
+    force_dirty_.store(true, std::memory_order_release);
+  }
+  bool pan_drag_ = false;
+  bool help_open_ = false;
+  bool help_lprev_ = false;  // d350：帮助面板点击关闭用（弹起边沿检测）
+  // v0.6.1 d353：解码方式镜像（右键「解码」子菜单勾选）。0 软解 / 1 自动
+  //（auto-safe，默认）/ 2 NVDEC / 3 DXVA2。点选本地翻转（本帧反馈）+ 回投
+  // DecodeMode 意图，2Hz 轮询 hwdec-current 到手后校正（"no"→0；非 "no" 无法
+  // 区分具体硬解后端，维持现值）。
+  int hwdec_mode_ = 1;
+  // v0.6.1 d347：右键二级子菜单状态（当前仅「窗口大小」一个父条目；子条目表
+  // 每帧在出帧路径重建——主菜单条目表本身是条件增减的，父条目下标每帧重扫）。
+  bool ctx_sub_open_ = false;   // 子菜单展开中（父条目 hover 展开 / 点外或 ESC 收起）
+  // v0.6.1 d353：第二个父条目「解码」加入 → 记录展开的是哪个父条目
+  //（0=窗口大小 1=解码；父条目扫描/子条目构造/交互块据此分派）。
+  int ctx_sub_kind_ = 0;
+  int ctx_sub_hover_ = -1;
+  int ctx_sub_press_ = -1;      // 按下锁定的子条目（弹起同条目才激活，标准菜单语义）
+  bool ctx_sub_lprev_ = false;
+  // d347：子菜单收起（所有主菜单关闭点共用；force_dirty 保证收起帧被画出）
+  void close_ctx_sub() {
+    if (ctx_sub_open_) {
+      ctx_sub_open_ = false;
+      force_dirty_.store(true, std::memory_order_release);
+    }
+  }
   // d45：主线程请求关闭右键菜单（ESC）。菜单开着 → 关；没开 → 渲染线程回投
   // Close 意图（保持 ESC 原本的关窗行为）。菜单状态在渲染线程手里，主线程
   // 不知情，故只能走这个单向请求标记。d47：附带唤醒 —— 渲染线程已改按需睡眠

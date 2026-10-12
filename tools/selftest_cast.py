@@ -8,7 +8,7 @@
 import sys
 import urllib.request
 
-HOSTS = ("http://127.0.0.1:49152", "http://192.0.2.1:49152")
+HOSTS = ("http://127.0.0.1:49152", "http://192.168.2.99:49152")
 SERVICE = "urn:schemas-upnp-org:service:AVTransport:1"
 DEFAULT_URL = ("http://commondatastorage.googleapis.com/gtv-videos-bucket/"
                "sample/BigBuckBunny.mp4")

@@ -187,6 +187,12 @@ fi
 
 [ -f "$BUILD_DIR/bin/flashrec.exe" ] || die "没找到 $BUILD_DIR/bin/flashrec.exe，构建没成功"
 
+# ★v0.6.1 d359：AirPlay 编入断言 —— 开发默认 OFF 的教训（真机「AirPlay 搜不到」）。
+# 配置虽已钉 ON，但缓存/依赖链任何一环静默失效都会编出无 AirPlay 的包；二进制里
+# 搜 mDNS 服务类型字符串，搜不到 = AirPlay 没编进去，直接拒包。
+grep -aq "_raop._tcp" "$BUILD_DIR/bin/flashrec.exe" \
+  || die "断言失败：flashrec.exe 内找不到 _raop._tcp（AirPlay 未编入）——检查 FR_AIRPLAY/uxplay.cmake 导出"
+
 VERSION="$(sed -n 's/^project(FlashRec VERSION \([0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1 || true)"
 [ -n "$VERSION" ] || die "从 CMakeLists.txt 里读不到 project(VERSION)"
 log "版本 $VERSION"

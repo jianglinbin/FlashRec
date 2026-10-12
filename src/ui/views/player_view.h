@@ -24,7 +24,7 @@ struct ViewInput {
   double last_input = 0;         // 最近输入时刻（idle 隐去基准）
   float dt = 0;                  // 帧间隔（秒）——按钮 hover/press 动画步长
   bool down = false;             // 左键按住
-  bool down_middle = false;      // 中键按住（音量区 = 静音）
+  bool down_middle = false;      // 中键按住（全窗口 = 静音切换，d355 放开区域限制）
   bool down_right = false;       // 右键按住（d45：菜单边沿检测在渲染线程，见 render_loop）
   // 本帧是否已有控件消费掉这次点击（空白处单击/双击判定据此让位；每帧开始由 main 清零）
   bool click_consumed = false;
@@ -52,9 +52,11 @@ struct ViewInput {
   ButtonFx btns;
   // OSD 反馈（d28；主线程写，随 publish 广播；渲染线程零跨帧状态 ——
   // 淡出曲线由 now - osd_at 推算，不依赖任何渲染线程续接）
-  int osd_kind = 0;      // 0=无 1=音量 2=进度(seek 目标时间) 3=动作反馈(播放/暂停/全屏/画中画)
+  int osd_kind = 0;      // 0=无 1=音量 2=进度(seek 目标时间) 3=动作反馈(播放/暂停/全屏/画中画/
+                         // 停止/置顶) 4=倍速 5=窗口缩放 6=画面缩放（v0.6.1 d350）
   double osd_value = 0;  // 音量 0..100；seek = 目标绝对秒；kind3 = 动作 id（1 播放 2 暂停
-                         // 3 进全屏 4 退全屏 5 进画中画 6 退画中画）
+                         // 3 进全屏 4 退全屏 5 进画中画 6 退画中画 7 停止 8 置顶开 9 置顶关）；
+                         // kind4 = 倍速；kind5/6 = 缩放百分比（窗口/画面，50..500）
   double osd_at = 0;     // 触发时刻（与 now 同源，主循环 mono 秒）
   int osd_dir = 1;       // kind2：方向图标 1=前进 0=后退（d32：触发时定格，不再按实时
                          // 位置判定——seek 完成后 position==target 会误判成后退）

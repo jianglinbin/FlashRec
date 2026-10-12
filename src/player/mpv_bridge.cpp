@@ -351,10 +351,48 @@ double MpvBridge::video_aspect() {
   return (a > 0.01 && a < 100.0) ? a : 0.0;
 }
 
+// v0.6.1 d343：视频显示尺寸（含 SAR/PAR 修正），数字键缩放档位的锚定基准。
+//   首选 video-out-params/dw/dh —— mpv 按显示口径算好的整型（含 rotation/容器
+//   SAR 修正），与 d281 video_aspect 同源但更直接（不用自己乘）；
+//   回退：width × video-params/aspect 估算（老 mpv 属性缺失时）；
+//   都取不到（无视频/音频流）返回 false，调用方无动作。
+bool MpvBridge::video_display_size(int* w, int* h) {
+  if (!mpv_ || !w || !h) return false;
+  int64_t dw = 0, dh = 0;
+  if (mpv_get_property(mpv_, "video-out-params/dw", MPV_FORMAT_INT64, &dw) >= 0 &&
+      mpv_get_property(mpv_, "video-out-params/dh", MPV_FORMAT_INT64, &dh) >= 0 &&
+      dw > 0 && dh > 0) {
+    *w = (int)dw;
+    *h = (int)dh;
+    return true;
+  }
+  // 回退：解码宽 × 显示宽高比（d281 同口径；aspect 取不到按 1.0 = 方像素）。
+  int64_t wid = 0;
+  if (mpv_get_property(mpv_, "width", MPV_FORMAT_INT64, &wid) >= 0 && wid > 0) {
+    const double a = video_aspect();
+    const double disp_w = (double)wid * (a > 0.01 ? a : 1.0);
+    int64_t hei = 0;
+    if (mpv_get_property(mpv_, "height", MPV_FORMAT_INT64, &hei) >= 0 && hei > 0) {
+      *w = (int)disp_w;
+      *h = (int)hei;
+      return true;
+    }
+  }
+  return false;
+}
+
 void MpvBridge::load_uri(const std::string& uri, double start_sec,
                          const std::string& load_format) {  if (!mpv_) return;
   // d184：每次加载应用视频填充（cover=1/contain=0；等价 CSS object-fit）
   mpv_set_property(mpv_, "panscan", MPV_FORMAT_DOUBLE, &panscan_);
+  // d350：画面缩放是会话级状态——新会话（任何协议的 SetURI）重置回 100%/零平移，
+  // 防止上一会话的 video-zoom/pan 残留到新投屏（main 侧经快照边沿同步重置）。
+  video_zoom_ = 1.0;
+  video_pan_x_ = 0.0;
+  video_pan_y_ = 0.0;
+  mpv_set_property(mpv_, "video-zoom", MPV_FORMAT_DOUBLE, &video_zoom_);
+  mpv_set_property(mpv_, "video-pan-x", MPV_FORMAT_DOUBLE, &video_pan_x_);
+  mpv_set_property(mpv_, "video-pan-y", MPV_FORMAT_DOUBLE, &video_pan_y_);
   // d196：留边底色随皮肤（contain 时 letterbox 用 stageBg，而非 mpv 默认黑）
   if (!bg_color_.empty())
     mpv_set_property_string(mpv_, "background-color", bg_color_.c_str());
@@ -452,17 +490,40 @@ bool MpvBridge::reload_after_backend_switch() {
   needs_reload_.store(false, std::memory_order_release);
   if (!mpv_ || !render_ || backend_ != VideoBackend::Software) return false;
   if (last_uri_.empty()) return false;
+  return reload_current_preserve_pos();
+}
 
+// v0.6.1 d352：从 reload_after_backend_switch 抽出的公共段（无门槛，调用方自判）。
+bool MpvBridge::reload_current_preserve_pos() {
+  if (!mpv_ || last_uri_.empty()) return false;
   // 位置/暂停态从 mpv 现取（唯一真值），不依赖主线程缓存的 snap_
   double pos = 0.0;
   if (mpv_get_property(mpv_, "time-pos", MPV_FORMAT_DOUBLE, &pos) < 0) pos = 0.0;
   int paused = 0;
   bool was_paused = mpv_get_property(mpv_, "pause", MPV_FORMAT_FLAG, &paused) >= 0 && paused != 0;
 
-  FR_LOG_WARN("[MPV] 后端降级后按位重载续播 pos={:.2f}s paused={}", pos, was_paused ? 1 : 0);
+  FR_LOG_WARN("[MPV] 按位重载续播 pos={:.2f}s paused={}", pos, was_paused ? 1 : 0);
   load_uri(last_uri_, pos > 0.0 ? pos : 0.0);  // start=pos 精确续播；内部记录 last_uri_ 不变
   if (was_paused) set_pause(true);             // 暂停态一并恢复（loadfile 不重置 pause 属性）
   return true;
+}
+
+// v0.6.1 d353：解码方式选择（右键「解码」子菜单；取代 d352 二值开关）。
+// ① mpv 属性运行时改 hwdec 对**已加载流**不保证重初始化解码器（d151 实测 hwdec=no
+//   只对后续 loadfile 生效的教训），故有会话时一律按位重载，确定生效；
+// ② 重载会连带重置渲染属性（zoom/pan），main 侧在调用后按自身状态重放（见 main）；
+// ③ 无会话时只落属性，对后续 loadfile 生效；
+// ④ 模式表与 render_loop 子菜单条目一一对应，改一处必须改另一处。
+void MpvBridge::set_hwdec_mode(int mode) {
+  if (!mpv_) return;
+  const char* val = "auto-safe";
+  const char* name = "自动(auto-safe)";
+  if (mode == 0) { val = "no"; name = "软解(no)"; }
+  else if (mode == 2) { val = "nvdec-copy"; name = "NVDEC(nvdec-copy)"; }
+  else if (mode == 3) { val = "dxva2-copy"; name = "DXVA2(dxva2-copy)"; }
+  mpv_set_property_string(mpv_, "hwdec", val);
+  FR_LOG_WARN("[MPV] 解码切换 → {}（重载当前流生效）", name);
+  if (!last_uri_.empty()) reload_current_preserve_pos();
 }
 
 void MpvBridge::set_pause(bool p) {
@@ -502,6 +563,32 @@ void MpvBridge::set_speed(double s) {
 void MpvBridge::set_panscan(double p) {
   panscan_ = p < 0 ? 0 : (p > 1 ? 1 : p);
   if (mpv_) mpv_set_property(mpv_, "panscan", MPV_FORMAT_DOUBLE, &panscan_);
+}
+
+// v0.6.1 d350：画面缩放（渲染侧，窗口不动）。mpv `video-zoom` 是 **2 的幂指数标度**：
+// 0 = 适配基准，1.0 = 放大 2 倍，-1.0 = 缩小一半。★d351 修正：d350 误按线性倍率
+// 传入（100% → 1.0 = 2 倍），用户实测「100% 已放大、50% 反而不缩小」即此因；
+// 现入参直接收 mpv 原生标度，百分比 → log2 换算归调用方（main 侧统一做）。
+// 与 panscan（d184 填充/d281 自适应）正交叠加，互不覆盖——DLNA 直链 / AirPlay
+// 镜像回流 / HLS 三路径同为 mpv 渲染，统一生效；纯渲染属性，不触碰 SOAP/GENA
+// 状态变量与镜像数据流，协议面零感知。
+void MpvBridge::set_video_zoom(double z) {
+  // ★d351：夹取范围同步换到 log 域（[-2, 3] = 25%..800%，罩住 UI 的 50–500%
+  //（d354 上限扩展；log2(5)≈2.32 仍在界内，夹取无需再动）。
+  // 旧 [0.1, 10] 线性夹会把 -1.0（50%）顶回 0.1，缩不下去。
+  video_zoom_ = z < -2.0 ? -2.0 : (z > 3.0 ? 3.0 : z);
+  if (mpv_) mpv_set_property(mpv_, "video-zoom", MPV_FORMAT_DOUBLE, &video_zoom_);
+}
+
+// d350：画面平移（绝对设置；单位 = viewport 宽高比）。缩放 >100% 时被裁部分
+// 靠 pan 移入视野；100% 时调用方应传 0（无内容可平移）。
+void MpvBridge::set_video_pan(double x, double y) {
+  video_pan_x_ = x < -1.0 ? -1.0 : (x > 1.0 ? 1.0 : x);
+  video_pan_y_ = y < -1.0 ? -1.0 : (y > 1.0 ? 1.0 : y);
+  if (mpv_) {
+    mpv_set_property(mpv_, "video-pan-x", MPV_FORMAT_DOUBLE, &video_pan_x_);
+    mpv_set_property(mpv_, "video-pan-y", MPV_FORMAT_DOUBLE, &video_pan_y_);
+  }
 }
 
 void MpvBridge::set_background_color(const std::string& rgb_hex) {

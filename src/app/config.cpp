@@ -295,6 +295,8 @@ Config Config::load(const std::string& path) {
   cfg.ui_show_info = get_bool("ui.show_info", cfg.ui_show_info);
   // d146 R2/R4：投屏自动全屏 + 多屏记忆
   cfg.ui_cast_auto_fullscreen = get_bool("ui.cast_auto_fullscreen", cfg.ui_cast_auto_fullscreen);
+  // v0.6.1 d342：窗口置顶（独立于画中画；右键/托盘勾选，切换即落盘）
+  cfg.ui_always_on_top = get_bool("ui.always_on_top", cfg.ui_always_on_top);
   if (auto* pv = get("ui.window.prefer"); pv && !pv->empty()) cfg.ui_window_prefer = *pv;
   for (const auto& raw : j.monitors) {
     MonitorMemory m;

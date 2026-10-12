@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 # 版本号是打包的唯一来源（deb 文件名 / CPack 元数据 / .desktop）；改版本先改这里，
 # 且必须与 ledger/INDEX.md 中状态为「进行中」的版本一致。
-project(FlashRec VERSION 0.6.0 LANGUAGES C CXX)
+project(FlashRec VERSION 0.6.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -74,6 +74,14 @@ endif()
 
 if (FR_AIRPLAY)
   # 内嵌 AirPlay（v0.6.0）：适配器源码由 cmake/uxplay.cmake 导出，OFF 时列表为空。
+  # ★v0.6.1 d359：ON 但源码列表为空 = 依赖链某环静默失效（UxPlay 未 clone/导出
+  # 失败），会编出「无 AirPlay 的发布包」且零告警 —— 本仓库开发构建曾因缓存 OFF
+  # 踩坑（真机「AirPlay 搜不到」，d358）。钉死：开了开关就必须真有源码。
+  if ("${FR_AIRPLAY_SOURCES}" STREQUAL "")
+    message(FATAL_ERROR
+      "FR_AIRPLAY=ON 但 FR_AIRPLAY_SOURCES 为空 —— UxPlay 适配器导出失败或未执行 "
+      "tools/fetch_deps.sh（third_party/uxplay 缺失）。拒绝静默产出无 AirPlay 的包。")
+  endif()
   list(APPEND FR_SOURCES ${FR_AIRPLAY_SOURCES})
 endif()
 

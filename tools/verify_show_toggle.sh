@@ -14,9 +14,9 @@
 #
 # 前置：应用以 systemd-run 启动（journald 收 stdout，脚本才读得到日志）：
 #   systemd-run --user --unit=flashrec --collect --setenv=DISPLAY=:0 \
-#               --setenv=FR_DBG_DAMAGE=3 /home/<user>/flashrec/src/build/bin/flashrec
+#               --setenv=FR_DBG_DAMAGE=3 /home/ben/flashrec/src/build/bin/flashrec
 # 用法：tools/verify_show_toggle.sh [轮数，默认 4]
-# 传到测试机：python tools/debian_run.py --put tools/verify_show_toggle.sh /home/<user>/
+# 传到测试机：python tools/debian_run.py --put tools/verify_show_toggle.sh /home/ben/
 #             （sync_debian.py 只同步 src/assets/cmake，不含 tools/）
 
 set -u

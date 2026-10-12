@@ -78,6 +78,7 @@ struct UiRegions {
   DmgRect osd;          // OSD 包络带（与 draw_osd 的 dmg_hit 包络同式：横全宽）
   DmgRect thumb_card;   // 缩略图浮层 + 时间气泡包络带（横全宽，y 随锚点走）
   DmgRect ctx_menu;     // 右键菜单面板（render_loop 出帧路径用 ctx_lay 补填）
+  DmgRect ctx_sub_menu;  // v0.6.1 d347：右键二级子菜单面板（render_loop 用 sub_lay 补填）
   DmgRect speed_menu;   // d169 倍速档位弹层（render_loop 出帧路径用 speed_lay 补填）
   DmgRect skin_menu;    // d182 皮肤弹层（render_loop 出帧路径用 skin_lay 补填）
   DmgRect prompt_bar;   // d74 剪贴板链接提示条横幅

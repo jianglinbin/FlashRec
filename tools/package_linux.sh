@@ -114,10 +114,11 @@ if [ "$DO_CLEAN" = 1 ]; then
 fi
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  log "配置（prefix=/usr —— deb 的根，且会写进 .desktop 的 Exec）"
+  log "配置（prefix=/usr —— deb 的根，且会写进 .desktop 的 Exec；发布口径钉 AirPlay=ON）"
   cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
+        -DFR_AIRPLAY=ON \
         >/dev/null
   log "构建（-j$JOBS）"
   cmake --build "$BUILD_DIR" -j "$JOBS"
@@ -128,6 +129,10 @@ fi
 
 [ -x "$BUILD_DIR/bin/flashrec" ] || die "没找到 $BUILD_DIR/bin/flashrec，构建没成功"
 [ -f "$BUILD_DIR/$APP_ID.desktop" ] || die "没找到 $BUILD_DIR/$APP_ID.desktop（cmake/linux_desktop.cmake 没生效？）"
+# ★v0.6.1 d359：AirPlay 编入断言 —— 开发默认 OFF 的教训（真机「AirPlay 搜不到」）。
+# 二进制里搜 mDNS 服务类型字符串，搜不到 = AirPlay 没编进去，直接拒包。
+grep -aq "_raop._tcp" "$BUILD_DIR/bin/flashrec" \
+  || die "断言失败：flashrec 内找不到 _raop._tcp（AirPlay 未编入）——检查 FR_AIRPLAY 与 libssl-dev/libplist-dev"
 
 VERSION="$(sed -n 's/^project(FlashRec VERSION \([0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1 || true)"
 [ -n "$VERSION" ] || die "从 CMakeLists.txt 里读不到 project(VERSION)"
