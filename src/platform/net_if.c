@@ -315,7 +315,7 @@ int fr_net_if_subnet_match_nbo(unsigned int ip_nbo, int no_if_fallback) {
 const char* fr_net_if_preferred_host(const char* host_port_fallback) {
   // 注意入参是 "ip:端口"（libupnp 的 addrToString 产物），不是裸 IP ——
   // 只换主机段、**端口原样保留**。早先直接把整串换成裸 IP，导致 URLBase 变成
-  // http://192.168.2.99/（端口丢失）⇒ 客户端按 80 端口发 SOAP ⇒ 连接被拒。
+  // http://192.0.2.1/（端口丢失）⇒ 客户端按 80 端口发 SOAP ⇒ 连接被拒。
   static char buf[64];
   const char* ip = NULL;
   for (int i = 0; i < g_count; ++i) {

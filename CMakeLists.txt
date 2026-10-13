@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 # 版本号是打包的唯一来源（deb 文件名 / CPack 元数据 / .desktop）；改版本先改这里，
 # 且必须与 ledger/INDEX.md 中状态为「进行中」的版本一致。
-project(FlashRec VERSION 0.6.1 LANGUAGES C CXX)
+project(FlashRec VERSION 0.6.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,6 +26,7 @@ set(FR_SOURCES
   src/app/config.cpp
   src/app/theme_loader.cpp   # d180：JSON 驱动皮肤加载（M1）
   src/app/event_bus.cpp
+  src/app/i18n.cpp             # v0.6.2 d362：UI 文案多语言（zh-CN/en-US 内置表）
   src/app/log.cpp
   src/app/str_util.cpp
   src/dmr/dmr_device.cpp

@@ -60,5 +60,10 @@ void remove() {
   }
 }
 
+void set_tooltip(const char* tooltip) {
+  // v0.6.2 d362：语言热切换（XEmbed 后端默认空实现 = 安全无操作）
+  if (g_backend) g_backend->set_tooltip(tooltip);
+}
+
 }  // namespace tray
 }  // namespace fr

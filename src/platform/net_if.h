@@ -44,7 +44,7 @@ int fr_net_if_scan(void);
 int fr_net_if_count(void);
 
 // 以下取值函数：idx 越界返回 NULL / 0。
-const char* fr_net_if_ip(int idx);     // 点分十进制，如 "192.168.2.99"
+const char* fr_net_if_ip(int idx);     // 点分十进制，如 "192.0.2.1"
 const char* fr_net_if_mask(int idx);   // 子网掩码，如 "255.255.255.0"
 const char* fr_net_if_name(int idx);   // 系统接口名（Win 为 FriendlyName）
 unsigned int fr_net_if_index(int idx); // 系统接口索引（Win IfIndex / Linux if_nametoindex）

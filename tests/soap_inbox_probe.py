@@ -18,7 +18,7 @@ logs/soap_inbox.log）确实在**入口**把请求原文逐字节落盘，并顺
 用法：
     python tests/soap_inbox_probe.py                 # 用默认本地 mp4
     python tests/soap_inbox_probe.py --uri <URI>     # 换成任意 URI
-    python tests/soap_inbox_probe.py --host 192.168.2.99
+    python tests/soap_inbox_probe.py --host 192.0.2.1
 仅标准库，无需第三方依赖。
 """
 

@@ -23,7 +23,7 @@ import urllib.request
 
 HOST = "http://127.0.0.1:49152"
 SERVICE = "urn:schemas-upnp-org:service:AVTransport:1"
-LOG = r"C:\Users\ben\AppData\Roaming\FlashRec\logs\flashrec.log"
+LOG = r"C:\Users\<user>\AppData\Roaming\FlashRec\logs\flashrec.log"
 
 
 def soap(action: str, body: str = "") -> None:

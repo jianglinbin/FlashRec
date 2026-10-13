@@ -5,6 +5,7 @@
 #include <nanovg.h>
 
 #include "app/event_bus.h"
+#include "app/i18n.h"  // v0.6.2 d362：界面文案多语言
 #include "ui/theme.h"
 #include "ui/views/chrome.h"
 #include "ui/widgets.h"
@@ -28,7 +29,8 @@ void draw_empty_state(NVGcontext* vg, const Theme& t, float w, float h,
     if (dmg_hit(clip, 0.f, 0.f, w, L.topBarH)) {
       bar(vg, t, 0, 0, w, L.topBarH, true, rad, &t.topBarBg);
       text(vg, t, L.topBarPadL, L.topBarH * 0.5f, L.titleFont, t.titleText, "FlashRec");
-      text(vg, t, L.topBarPadL + 58, L.topBarH * 0.5f, L.badgeFont, t.mutedText, "投屏接收端");
+      text(vg, t, L.topBarPadL + 58, L.topBarH * 0.5f, L.badgeFont, t.mutedText,
+           tr(i18n::StrId::EmptyBadge));
     }
     draw_win_buttons(vg, t, w, in, cb, clip);
     draw_skin_button(vg, t, w, in, cb, clip);  // d182：顶栏皮肤按钮
@@ -42,7 +44,7 @@ void draw_empty_state(NVGcontext* vg, const Theme& t, float w, float h,
   text(vg, t, w * 0.5f, h * 0.5f - 14, 20, stage_t,
        friendly_name && *friendly_name ? friendly_name : "FlashRec",
        NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
-  text(vg, t, w * 0.5f, h * 0.5f + 12, 12, stage_s, "等待投屏 · 在播放器的投屏设备中选择本机",
+  text(vg, t, w * 0.5f, h * 0.5f + 12, 12, stage_s, tr(i18n::StrId::EmptyHint),
        NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
 
   // —— 底栏：与播放态同一份实现；媒体类控件随会话可用性，窗口类控件恒可用 ——
@@ -70,7 +72,8 @@ void draw_standby_mini(NVGcontext* vg, const Theme& t, float w, float h,
     text(vg, t, cx, cy - 11, 15, stage_t, name, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
   else
     text_truncated(vg, t, 12, cy - 11, 15, stage_t, name, w - 24);
-  text(vg, t, cx, cy + 11, 11, stage_s, "等待投屏", NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+  text(vg, t, cx, cy + 11, 11, stage_s, tr(i18n::StrId::EmptyWaiting),
+       NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
 }
 
 }  // namespace fr

@@ -51,6 +51,10 @@ void poll();
 // 退出路径调用一次（删图标 + 销毁消息窗口）。未创建时为空操作。
 void remove();
 
+// 运行中更新托盘悬停提示（v0.6.2 d362：语言热切换后 tooltip 同步换语言）。
+// 未创建时为空操作；XEmbed 后端无 tooltip 机制（安全空实现）。
+void set_tooltip(const char* tooltip);
+
 }  // namespace tray
 
 }  // namespace fr

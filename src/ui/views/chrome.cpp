@@ -7,6 +7,7 @@
 #include <nanovg.h>
 
 #include "app/event_bus.h"
+#include "app/i18n.h"  // v0.6.2 d362：界面文案多语言
 #include "app/str_util.h"
 #include "ui/regions.h"  // Geom/geom_of（v0.4.0 d56 提升：命中/绘制/归因同源）
 #include "ui/theme.h"
@@ -415,8 +416,9 @@ void draw_bottom_bar(NVGcontext* vg, const Theme& t, float w, float h,
   nvgGlobalAlpha(vg, 1.f);
 }
 
-// —— 常驻迷你进度线（d37 用户定值）：贴底、全宽（以窗口宽度为进度参考）、
-// 收窄 2px、面板隐去后**不消失** —— 无面板时用户仍可感知播放进度。
+// —— 常驻迷你进度线（d37 用户定值）：贴底、随窗口宽度（d367→d369：UI 实际绘制
+// 圆角时两端各让 win_radius，见绘制段注释）、收窄 2px、面板隐去后**不消失** ——
+// 无面板时用户仍可感知播放进度。
 // 低调：alpha = (1 - fade) × miniLineMaxAlpha，面板出现时让位给完整进度条。
 // 键盘拖动（kb）时由 kb_progress_value 驱动（预览跟随），释放 0.6s 后回真实位置。
 void draw_mini_progress(NVGcontext* vg, const Theme& t, float w, float h,
@@ -433,13 +435,22 @@ void draw_mini_progress(NVGcontext* vg, const Theme& t, float w, float h,
   if (alpha < 0.02f) return;
   nvgGlobalAlpha(vg, alpha);
   const float y = h - L.miniLineH;
+  // d367→d369（用户拍板）：收边判定 = **当前 UI 是否绘制圆角**（in.win_radius，
+  // render_loop 已按 fullscreen/maximized 归零），而非皮肤有没有圆角 token ——
+  // 全屏/最大化时窗口无圆角，线体应恢复全宽。窗口最底行的可见区恰从
+  // x=r 起（圆角圆心 (r, h−r)，底行 y=h 处弧线交点 x=r），全宽绘制会伸出
+  // 圆角裁切区（d366 截图实证：左端色条悬在透明圆角外）。r=0 时行为同旧版；
+  // 窗口极窄（w ≤ 2r）退回全宽防负宽。
+  const float r = in.win_radius;
+  const float x0 = (r > 0.f && w > 2.f * r) ? r : 0.f;
+  const float lw = w - 2.f * x0;
   nvgBeginPath(vg);
-  nvgRect(vg, 0, y, w, L.miniLineH);
+  nvgRect(vg, x0, y, lw, L.miniLineH);
   nvgFillColor(vg, t.track);
   nvgFill(vg);
   if (p > 0.001f) {
     nvgBeginPath(vg);
-    nvgRect(vg, 0, y, w * p, L.miniLineH);
+    nvgRect(vg, x0, y, lw * p, L.miniLineH);
     nvgFillColor(vg, t.played);
     nvgFill(vg);
   }
@@ -520,19 +531,22 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
     } else {
       const int id = (int)(in.osd_value + 0.5);
       switch (id) {
-        case 1: label = "播放"; break;
-        case 2: label = "暂停"; break;
-        case 3: label = "全屏"; break;
-        case 4: label = "退出全屏"; break;
-        case 5: label = "画中画"; break;
-        case 6: label = "退出画中画"; break;
-        case 7: label = "停止"; break;
-        case 8: label = "窗口置顶 开"; break;  // v0.6.1 d342：置顶反馈
-        case 9: label = "窗口置顶 关"; break;  // v0.6.1 d342
-        case 10: label = "解码 · 自动"; break;      // v0.6.1 d353：解码选择反馈
-        case 11: label = "解码 · 软解"; break;      // v0.6.1 d353
-        case 12: label = "解码 · NVDEC"; break;     // v0.6.1 d353
-        case 13: label = "解码 · DXVA2"; break;     // v0.6.1 d353
+        // v0.6.2 d362：OSD 标签走 i18n（id 表与 main.cpp show_osd 调用方一一对应）
+        case 1: label = tr(i18n::StrId::OsdPlay); break;
+        case 2: label = tr(i18n::StrId::OsdPause); break;
+        case 3: label = tr(i18n::StrId::OsdFullscreen); break;
+        case 4: label = tr(i18n::StrId::OsdExitFullscreen); break;
+        case 5: label = tr(i18n::StrId::OsdPip); break;
+        case 6: label = tr(i18n::StrId::OsdExitPip); break;
+        case 7: label = tr(i18n::StrId::OsdStop); break;
+        case 8: label = tr(i18n::StrId::OsdTopOn); break;   // v0.6.1 d342：置顶反馈
+        case 9: label = tr(i18n::StrId::OsdTopOff); break;  // v0.6.1 d342
+        case 10: label = tr(i18n::StrId::OsdDecodeAuto); break;   // v0.6.1 d353
+        case 11: label = tr(i18n::StrId::OsdDecodeSw); break;     // v0.6.1 d353
+        case 12: label = tr(i18n::StrId::OsdDecodeNvdec); break;  // v0.6.1 d353
+        case 13: label = tr(i18n::StrId::OsdDecodeDxva2); break;  // v0.6.1 d353
+        case 14: label = tr(i18n::StrId::OsdLangZh); break;  // v0.6.2 d362：语言反馈
+        case 15: label = tr(i18n::StrId::OsdLangEn); break;  // v0.6.2 d362
         default: label = ""; break;
       }
     }
@@ -568,7 +582,8 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
     const float py = L.osdTopGap;
     const float s = std::min(1.f, h * L.osdMaxHRatio / L.osdSeekH);
     const float ph = L.osdSeekH * s;
-    const std::string label = "倍速 " + format_speed(in.osd_value);
+    const std::string label =
+        tr(i18n::StrId::OsdSpeedPrefix) + format_speed(in.osd_value);
     const float tw = text_width(vg, L.osdFont * s, label.c_str());
     const float pw = tw + L.osdSpeedPad * s;
     rounded_rect(vg, px, py, pw, ph, L.osdRadius * s, t.barBg);
@@ -583,7 +598,7 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
     const float s = std::min(1.f, h * L.osdMaxHRatio / L.osdSeekH);
     const float ph = L.osdSeekH * s;
     const std::string label =
-        "窗口 " + std::to_string((int)(in.osd_value + 0.5)) + "%";
+        tr(i18n::StrId::OsdWindowPrefix) + std::to_string((int)(in.osd_value + 0.5)) + "%";
     const float tw = text_width(vg, L.osdFont * s, label.c_str());
     const float pw = tw + L.osdSpeedPad * s;
     rounded_rect(vg, px, py, pw, ph, L.osdRadius * s, t.barBg);
@@ -597,7 +612,7 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
     const float s = std::min(1.f, h * L.osdMaxHRatio / L.osdSeekH);
     const float ph = L.osdSeekH * s;
     const std::string label =
-        "画面 " + std::to_string((int)(in.osd_value + 0.5)) + "%";
+        tr(i18n::StrId::OsdZoomPrefix) + std::to_string((int)(in.osd_value + 0.5)) + "%";
     const float tw = text_width(vg, L.osdFont * s, label.c_str());
     const float pw = tw + L.osdSpeedPad * s;
     rounded_rect(vg, px, py, pw, ph, L.osdRadius * s, t.barBg);
@@ -620,19 +635,21 @@ void draw_help(NVGcontext* vg, const Theme& t, float win_w, float win_h,
     const char* action;  // 动作
     const char* keys;    // 键位
   };
-  static constexpr HelpRow kRows[] = {
-      {"播放 / 暂停", "Space"},
-      {"音量 + / -", "↑ / ↓ / 滚轮"},
-      {"静音切换", "鼠标中键"},
-      {"进度（按住拖动）", "← / →"},
-      {"全屏切换", "双击 / Ctrl+Enter"},
-      {"退出全屏 / 画中画", "Esc"},
-      {"窗口置顶", "Ctrl+T / 右键菜单"},
-      {"窗口大小 50–500%（七档）", "1–7"},
-      {"画面缩放（步进 10%）", "Ctrl+↑↓ / Ctrl+滚轮"},
-      {"画面平移（放大后拖看）", "Ctrl+左键拖拽"},
-      {"画面缩放复位 100%", "Ctrl+中键"},
-      {"帮助面板", "F1"},
+  // v0.6.2 d362：动作列走 i18n（键位列是键位符号，双语一致）；每帧现取
+  //（原 static constexpr 中文表在语言热切换后不会刷新）。
+  const HelpRow kRows[] = {
+      {tr(i18n::StrId::HelpPlayPause), "Space"},
+      {tr(i18n::StrId::HelpVolume), tr(i18n::StrId::HelpKeysWheelVol)},
+      {tr(i18n::StrId::HelpMute), tr(i18n::StrId::HelpKeysMute)},
+      {tr(i18n::StrId::HelpSeek), "← / →"},
+      {tr(i18n::StrId::HelpFullscreen), tr(i18n::StrId::HelpKeysFs)},
+      {tr(i18n::StrId::HelpExitFsPip), "Esc"},
+      {tr(i18n::StrId::HelpAlwaysTop), tr(i18n::StrId::HelpKeysTop)},
+      {tr(i18n::StrId::HelpWindowSize), "1–7"},
+      {tr(i18n::StrId::HelpZoom), tr(i18n::StrId::HelpKeysZoom)},
+      {tr(i18n::StrId::HelpPan), tr(i18n::StrId::HelpKeysPan)},
+      {tr(i18n::StrId::HelpZoomReset), tr(i18n::StrId::HelpKeysReset)},
+      {tr(i18n::StrId::HelpPanel), "F1"},
   };
   constexpr int kN = (int)(sizeof(kRows) / sizeof(kRows[0]));
   const auto& L = t.layout;
@@ -665,7 +682,7 @@ void draw_help(NVGcontext* vg, const Theme& t, float win_w, float win_h,
 
   // 标题
   text(vg, t, cx0 + card_w * 0.5f, cy0 + title_h * 0.55f, font, t.icon,
-       "快捷键（F1 关闭）", NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+       tr(i18n::StrId::HelpTitle), NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
   // 分隔线
   nvgBeginPath(vg);
   nvgMoveTo(vg, cx0 + pad, cy0 + title_h);

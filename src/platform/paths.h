@@ -14,6 +14,9 @@ std::string asset_dir();
 std::string asset_file(const std::string& rel);
 // 系统中文字体（无则返回空串，UI 退化为默认字体）
 std::string find_cjk_font();
+// 系统界面语言（v0.6.2 d362 i18n auto 探测；返回 "zh-CN" / "en-US"——
+// 非中文环境一律保守回落英文，与 UI_I18N_PLAN.md §2.2 一致）
+std::string system_ui_language();
 // 设置进程环境变量（平台差异收口，供三方库经 getenv 读取配置）
 void set_env(const std::string& name, const std::string& value);
 // 运行时一次探测所有资源路径

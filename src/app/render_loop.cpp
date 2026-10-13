@@ -11,6 +11,7 @@
 #include <nanovg.h>
 
 #include "app/event_bus.h"
+#include "app/i18n.h"  // v0.6.2 d362：界面文案多语言
 #include "app/log.h"
 #include "platform/gl_lock.h"
 #include "platform/interaction.h"
@@ -1201,50 +1202,61 @@ void RenderLoop::frame(double now) {
     const bool pause_ok = media && snap.source != CastSource::AirPlay;
     auto add = [&](const char* label, CtxAction a, bool en, bool chk = false,
                    bool checked = false) { ctx_items[ctx_n++] = {label, a, en, chk, checked}; };
-    add("播放 / 暂停", CtxAction::PlayPause, pause_ok);
+    // v0.6.2 d362：全部条目标签走 i18n（语言子菜单见下方 d362 块）
+    add(tr(i18n::StrId::CtxPlayPause), CtxAction::PlayPause, pause_ok);
     // d158：与底栏同判定 —— 无上/下一集数据（next_uri 空）时不给这两个条目
     //（菜单每帧重建，数据到来/消失即随之增减，布局与命中同帧自洽）。
     if (!snap.next_uri.empty()) {
-      add("上一个", CtxAction::Prev, media);
-      add("下一个", CtxAction::Next, media);
+      add(tr(i18n::StrId::CtxPrev), CtxAction::Prev, media);
+      add(tr(i18n::StrId::CtxNext), CtxAction::Next, media);
     }
     add(nullptr, CtxAction::None, false);
     // d159：全屏项随状态改标签（全屏中 = "退出全屏"）；"退出"（关应用）只在窗口模式给，
     // 全屏下该位置换成"停止" —— 全屏看不到标题栏关闭键，全屏菜单里放关应用项易误触。
-    add(in.fullscreen ? "退出全屏" : "全屏", CtxAction::ToggleFullscreen, true);
-    add("画中画", CtxAction::Pip, true);
-    add("皮肤", CtxAction::Skin, true);  // d182：打开皮肤弹层（右键为辅）
+    add(in.fullscreen ? tr(i18n::StrId::CtxExitFullscreen) : tr(i18n::StrId::CtxFullscreen),
+        CtxAction::ToggleFullscreen, true);
+    add(tr(i18n::StrId::CtxPip), CtxAction::Pip, true);
+    add(tr(i18n::StrId::CtxSkin), CtxAction::Skin, true);  // d182：打开皮肤弹层（右键为辅）
     add(nullptr, CtxAction::None, false);
-    add("媒体信息（完整）", CtxAction::ShowMediaInfo, true, true, show_info_);
-    add("投屏自动全屏", CtxAction::CastAutoFullscreen, true, true, cast_auto_fs_);
+    add(tr(i18n::StrId::CtxMediaInfo), CtxAction::ShowMediaInfo, true, true, show_info_);
+    add(tr(i18n::StrId::CtxCastAutoFs), CtxAction::CastAutoFullscreen, true, true,
+        cast_auto_fs_);
     // v0.6.1 d342：窗口置顶（独立于画中画；勾选态 = always_on_top_ 镜像）
-    add("窗口置顶", CtxAction::AlwaysOnTop, true, true, always_on_top_);
+    add(tr(i18n::StrId::CtxAlwaysTop), CtxAction::AlwaysOnTop, true, true, always_on_top_);
     // v0.6.1 d353：解码选择改二级子菜单（d352 的二值开关不够用——真机证实
     // auto-safe 选中的 d3d11va-copy 花屏，需要可选硬解后端；双显卡机 NVDEC
     // 走 RTX 专用解码器）。父条目手工构造（sub=true 画 ▸）：
-    ctx_items[ctx_n++] = {"解码", CtxAction::DecodeMenu, true, false, false, true};
+    ctx_items[ctx_n++] = {tr(i18n::StrId::CtxDecode), CtxAction::DecodeMenu, true,
+                          false, false, true};
     add(nullptr, CtxAction::None, false);
     // v0.6.1 d347：窗口大小改二级子菜单——主菜单只留父条目（sub=true 画 ▸，
     // hover 展开；四档 Zoom50–200 进子面板，勾选 = zoom_pct_ 镜像）。
     // add lambda 无 sub 参数，父条目手工构造：
-    ctx_items[ctx_n++] = {"窗口大小", CtxAction::WindowZoomMenu, true, false, false, true};
+    ctx_items[ctx_n++] = {tr(i18n::StrId::CtxWindowSize), CtxAction::WindowZoomMenu, true,
+                          false, false, true};
+    // v0.6.2 d362：UI 语言二级子菜单（父条目同款 ▸；子项勾选 = i18n::lang 镜像，
+    // 激活 post LanguageChanged 意图 → 主线程换语言 + 落盘 + 回推全帧重绘）
+    ctx_items[ctx_n++] = {tr(i18n::StrId::CtxLanguage), CtxAction::LanguageMenu, true,
+                          false, false, true};
     add(nullptr, CtxAction::None, false);
     if (in.fullscreen)
-      add("停止", CtxAction::Stop, media);
+      add(tr(i18n::StrId::CtxStop), CtxAction::Stop, media);
     else
-      add("退出", CtxAction::Close, true);
+      add(tr(i18n::StrId::CtxExit), CtxAction::Close, true);
     ctx_lay = ctx_menu_layout(nvg_.ctx(), theme_, (float)w, (float)h, ctx_items, ctx_n,
                               ctx_anchor_x_, ctx_anchor_y_);
     ctx_hover = ctx_lay.item_at(in.mx, in.my);
 
-    // —— v0.6.1 d347/d353：二级子菜单构造 + 布局 + hover 展开/收起（两个父
-    // 条目：「窗口大小」/「解码」，ctx_sub_kind_ 分派）。子条目表每帧重建
-    //（主菜单条目表本身条件增减，父条目下标每帧重扫不缓存）。 ——
+    // —— v0.6.1 d347/d353 + v0.6.2 d362：二级子菜单构造 + 布局 + hover 展开/收起
+    //（三个父条目：「窗口大小」/「解码」/「语言」，ctx_sub_kind_ 分派：
+    //  0=窗口大小 1=解码 2=语言）。子条目表每帧重建（主菜单条目表本身条件增减，
+    //  父条目下标每帧重扫不缓存）。 ——
     ctx_sub_hover_ = -1;
     if (ctx_sub_open_) {
       // 父条目仍存在才维持展开；否则（菜单重建/会话变化）收起
-      const CtxAction parent_act =
-          ctx_sub_kind_ == 1 ? CtxAction::DecodeMenu : CtxAction::WindowZoomMenu;
+      const CtxAction parent_act = ctx_sub_kind_ == 1  ? CtxAction::DecodeMenu
+                                   : ctx_sub_kind_ == 2 ? CtxAction::LanguageMenu
+                                                        : CtxAction::WindowZoomMenu;
       int pidx = -1;
       for (int i = 0; i < ctx_n; ++i)
         if (ctx_items[i].action == parent_act) pidx = i;
@@ -1254,10 +1266,22 @@ void RenderLoop::frame(double now) {
         int sn = 0;
         if (ctx_sub_kind_ == 1) {
           // d353：解码四档（勾选 = hwdec_mode_ 镜像；与 mpv_bridge 的模式表一一对应）
-          sub_items[sn++] = {"软解", CtxAction::DecodeSw, true, true, hwdec_mode_ == 0};
-          sub_items[sn++] = {"硬解 · 自动", CtxAction::DecodeAuto, true, true, hwdec_mode_ == 1};
-          sub_items[sn++] = {"硬解 · NVDEC", CtxAction::DecodeNvdec, true, true, hwdec_mode_ == 2};
-          sub_items[sn++] = {"硬解 · DXVA2", CtxAction::DecodeDxva2, true, true, hwdec_mode_ == 3};
+          sub_items[sn++] = {tr(i18n::StrId::CtxDecodeSw), CtxAction::DecodeSw, true, true,
+                             hwdec_mode_ == 0};
+          sub_items[sn++] = {tr(i18n::StrId::CtxDecodeAuto), CtxAction::DecodeAuto, true,
+                             true, hwdec_mode_ == 1};
+          sub_items[sn++] = {tr(i18n::StrId::CtxDecodeNvdec), CtxAction::DecodeNvdec, true,
+                             true, hwdec_mode_ == 2};
+          sub_items[sn++] = {tr(i18n::StrId::CtxDecodeDxva2), CtxAction::DecodeDxva2, true,
+                             true, hwdec_mode_ == 3};
+        } else if (ctx_sub_kind_ == 2) {
+          // d362：语言两档（语言名按惯例恒用本名，不随界面语言变；
+          // 勾选 = i18n::lang 镜像，激活 post LanguageChanged 意图）
+          const bool zh = i18n::lang() == i18n::Lang::ZhCn;
+          sub_items[sn++] = {tr(i18n::StrId::LangZhName), CtxAction::LanguageZh, true, true,
+                             zh};
+          sub_items[sn++] = {tr(i18n::StrId::LangEnName), CtxAction::LanguageEn, true, true,
+                             !zh};
         } else {
           sub_items[sn++] = {"50%", CtxAction::Zoom50, true, true, zoom_pct_ == 50};
           sub_items[sn++] = {"100%", CtxAction::Zoom100, true, true, zoom_pct_ == 100};
@@ -1283,11 +1307,15 @@ void RenderLoop::frame(double now) {
     }
     // hover 到父条目 → 展开（Windows 惯例；force_dirty 保证出现帧被画出）。
     // d353：记录展开的是哪个父条目（子菜单构造/交互分派依据）。
+    // d362：语言父条目同款（kind=2）。
     if (ctx_open_ && !ctx_sub_open_ && ctx_hover >= 0 && ctx_items[ctx_hover].enabled) {
       const CtxAction hact = ctx_items[ctx_hover].action;
-      if (hact == CtxAction::WindowZoomMenu || hact == CtxAction::DecodeMenu) {
+      if (hact == CtxAction::WindowZoomMenu || hact == CtxAction::DecodeMenu ||
+          hact == CtxAction::LanguageMenu) {
         ctx_sub_open_ = true;
-        ctx_sub_kind_ = hact == CtxAction::DecodeMenu ? 1 : 0;
+        ctx_sub_kind_ = hact == CtxAction::DecodeMenu    ? 1
+                        : hact == CtxAction::LanguageMenu ? 2
+                                                          : 0;
         force_dirty_.store(true, std::memory_order_release);
       }
     }
@@ -1472,6 +1500,15 @@ void RenderLoop::frame(double now) {
           case CtxAction::DecodeDxva2:
             hwdec_mode_ = 3;
             channel_.post_intent({UiIntent::Kind::DecodeMode, 3.0});
+            break;
+          // v0.6.2 d362：语言子菜单激活 —— 语言真值在 i18n 模块（原子量），
+          // 渲染线程不本地翻转；post 意图由主线程 set_lang + 落盘 + tooltip +
+          // set_language 回推（force_dirty 全帧重绘）。
+          case CtxAction::LanguageZh:
+            channel_.post_intent({UiIntent::Kind::LanguageChanged, 0.0});
+            break;
+          case CtxAction::LanguageEn:
+            channel_.post_intent({UiIntent::Kind::LanguageChanged, 1.0});
             break;
           default: break;
         }
@@ -1713,27 +1750,27 @@ void RenderLoop::frame(double now) {
         return std::string(t);
       };
       if (media_.w > 0) {
-        std::string s = "分辨率 " + std::to_string(media_.w) + "×" +
-                        std::to_string(media_.h);
-        s += " · 编码 ";
+        std::string s = tr(i18n::StrId::InfoResolution) + std::to_string(media_.w) +
+                        "×" + std::to_string(media_.h);
+        s += tr(i18n::StrId::InfoVideoCodec);
         s += media_.vcodec.empty() ? "-" : media_.vcodec;
         if (media_.vbr > 0)
-          s += " · 码率 " + f1((double)media_.vbr / 1e6) + "Mbps";
+          s += tr(i18n::StrId::InfoBitrate) + f1((double)media_.vbr / 1e6) + "Mbps";
         else
-          s += " · 码率 -";
+          s += tr(i18n::StrId::InfoBitrateNone);
         if (!media_.hwname.empty()) {
           if (media_.hwname == "no")
-            s += " · 软解";
+            s += tr(i18n::StrId::InfoSwDecode);
           else
-            s += " · 硬解 " + media_.hwname;
+            s += tr(i18n::StrId::InfoHwDecode) + media_.hwname;
         }
         snprintf(r2, sizeof(r2), "%s", s.c_str());
         rows_n = 2;
         if (!media_.acodec.empty() || media_.asr > 0 || media_.ach > 0 ||
             media_.abr > 0) {
-          std::string a = "音频编码 ";
+          std::string a = tr(i18n::StrId::InfoAudio);
           a += media_.acodec.empty() ? "-" : media_.acodec;
-          a += " · 采样率 ";
+          a += tr(i18n::StrId::InfoSampleRate);
           if (media_.asr > 0) {
             char t[32];
             snprintf(t, sizeof(t), "%gkHz", media_.asr / 1000.0);
@@ -1741,9 +1778,9 @@ void RenderLoop::frame(double now) {
           } else {
             a += "-";
           }
-          a += " · 声道数 ";
+          a += tr(i18n::StrId::InfoChannels);
           a += media_.ach > 0 ? std::to_string(media_.ach) : std::string("-");
-          a += " · 码率 ";
+          a += tr(i18n::StrId::InfoBitrate);
           if (media_.abr > 0) {  // 文本从量化值派生（kbps 整数；mpv audio-bitrate 会抖）
             char t[32];
             snprintf(t, sizeof(t), "%lldkbps",
@@ -1781,11 +1818,13 @@ void RenderLoop::frame(double now) {
         yy += bh + L.badgeRowGap;
       };
       if (show_video_fps_) {
-        if (media_.vfps > 0)
-          snprintf(buf, sizeof(buf), "视频 %.1f fps", media_.vfps);
-        else
-          snprintf(buf, sizeof(buf), "视频 --");
-        badge(buf);
+        if (media_.vfps > 0) {
+          char nb[32];
+          snprintf(nb, sizeof(nb), "%.1f", media_.vfps);
+          badge(i18n::trf(i18n::StrId::BadgeVideoFpsFmt, {nb}).c_str());  // d362
+        } else {
+          badge(tr(i18n::StrId::BadgeVideoFpsNone));  // d362
+        }
       }
       if (show_fps_) {
         // d47：按需渲染下静默期真实出帧 ~0.5fps（2s 心跳），整数格式会显示成
@@ -1851,10 +1890,10 @@ void RenderLoop::frame(double now) {
         button_hit(vin.btns, kBtnClipPlay, inside_play, true, vin.down, vin.dt, theme_);
     const BtnState si =
         button_hit(vin.btns, kBtnClipIgnore, inside_ign, true, vin.down, vin.dt, theme_);
-    draw_prompt_btn(nvg_.ctx(), theme_, pl.btn_play_x, pl.btn_y, pl.btn_w, pl.btn_h, "播放", sp,
-                    true);
-    draw_prompt_btn(nvg_.ctx(), theme_, pl.btn_ignore_x, pl.btn_y, pl.btn_w, pl.btn_h, "忽略",
-                    si, false);
+    draw_prompt_btn(nvg_.ctx(), theme_, pl.btn_play_x, pl.btn_y, pl.btn_w, pl.btn_h,
+                    tr(i18n::StrId::OsdPlay), sp, true);  // d362：「播放」与 OSD 同文复用
+    draw_prompt_btn(nvg_.ctx(), theme_, pl.btn_ignore_x, pl.btn_y, pl.btn_w, pl.btn_h,
+                    tr(i18n::StrId::PromptDismiss), si, false);
     nvgGlobalAlpha(nvg_.ctx(), 1.f);
 
     if (sp.clicked) {

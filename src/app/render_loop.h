@@ -144,6 +144,12 @@ class RenderLoop {
     pan_drag_ = on;
     force_dirty_.store(true, std::memory_order_release);
   }
+  // v0.6.2 d362：语言热切换回推（语言真值 = i18n 模块原子量，主线程 set_lang 后
+  // 调这里；语言由 tr() 每帧现取，只需强制全帧重绘让所有文案下一帧换新）。
+  void set_language(int lang) {
+    (void)lang;  // 语言值已写入 i18n；参数仅为签名自明
+    force_dirty_.store(true, std::memory_order_release);
+  }
   // v0.6.1 d350：F1 帮助面板（全部快捷键一览）。开时全屏遮罩 + 居中卡片，
   // 点击面板/F1/ESC 关闭（点击经 ToggleHelp 意图回主线程统一翻转镜像）。
   // 与右键菜单/倍速/皮肤弹层互斥（开帮助连带关闭）。

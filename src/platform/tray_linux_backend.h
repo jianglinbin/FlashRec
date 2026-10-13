@@ -17,6 +17,9 @@ class Backend {
                       const TrayCallbacks& cb) = 0;
   virtual void poll() = 0;
   virtual void remove() = 0;
+  // v0.6.2 d362：运行中更新 tooltip（SNI=Title 属性；XEmbed 无 tooltip 机制，
+  // 默认空实现即可）。
+  virtual void set_tooltip(const char*) {}
 };
 
 // SNI 宿主探测：会话总线上 org.kde.StatusNotifierWatcher 有属主 = 可用。

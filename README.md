@@ -1,5 +1,7 @@
 # FlashRec
 
+简体中文 | [English](README.en.md)
+
 [![build-packages](https://github.com/jianglinbin/FlashRec/actions/workflows/release.yml/badge.svg)](https://github.com/jianglinbin/FlashRec/actions/workflows/release.yml)
 
 局域网投屏接收端 —— DLNA / UPnP（DMR）与 AirPlay 双协议，把手机上的视频或整块屏幕投到电脑上播放。
@@ -109,6 +111,9 @@ Linux 那条**必须在 Linux 上跑**（依赖推导与 AppImage 工具都是 L
 换肤：编辑 `settings.json` 把 `ui.skin` 改成内置皮肤 id（`nord-snow` / `nord-frost` /
 `nord-rose` / `nord-iris` / `nord-night` / `nord-forest` / `ubuntu-orange`），或在用户
 皮肤目录放入自己的 JSON 后点托盘「重载皮肤」。
+
+界面语言：默认跟随系统界面语言（`settings.json` 的 `ui.language`，`auto` / `zh-CN` /
+`en-US`）；右键菜单「语言」子菜单或托盘菜单底部两个语言项可即时切换，无需重启。
 
 ## 目录结构
 

@@ -28,6 +28,7 @@
 #define FLASHREC_VERSION "0.0.0-unknown"
 #endif
 #include "app/event_bus.h"
+#include "app/i18n.h"  // v0.6.2 d362：界面文案多语言
 #include "app/log.h"
 #include "app/theme_loader.h"  // d180：JSON 皮肤加载（M1）
 #include "app/render_loop.h"
@@ -58,6 +59,22 @@ namespace {
 double mono_now() {
   using namespace std::chrono;
   return duration_cast<duration<double>>(steady_clock::now().time_since_epoch()).count();
+}
+
+// v0.6.2 d364：皮肤显示名（方案 D，KDE .desktop 多语言键模式）。
+// 取链：当前语言 name[<后缀>]（en-us→en / zh-cn→zh，键已由 loader 小写归一）
+// → name（基础字段）→ 任意非空 name[xx] → id。语言热切换时 apply_language 重建列表。
+std::string skin_display_name(const SkinMeta& m) {
+  const bool en = i18n::lang() == i18n::Lang::EnUs;
+  const char* keys[2] = {en ? "en-us" : "zh-cn", en ? "en" : "zh"};
+  for (const char* k : keys) {
+    const auto it = m.localized_names.find(k);
+    if (it != m.localized_names.end() && !it->second.empty()) return it->second;
+  }
+  if (!m.name.empty()) return m.name;
+  for (const auto& kv : m.localized_names)
+    if (!kv.second.empty()) return kv.second;
+  return m.id;
 }
 
 // d74：从剪贴板文本提取首个 http(s) URL（形式校验只到 scheme 级——「可播」
@@ -254,6 +271,10 @@ int main(int argc, char** argv) {
   paths::init();
   crash_dump::install(paths::log_dir());  // 未处理异常 → minidump（事后定位崩溃模块）
   Config cfg = Config::load(paths::config_file());
+  // v0.6.2 d362：UI 语言。"auto"（默认）= 跟随系统界面语言（探测收口在
+  // platform/paths，规则 5）；显式值白名单映射在 i18n::init（未知 → 英文回落）。
+  i18n::init(cfg.ui_language == "auto" ? paths::system_ui_language()
+                                       : cfg.ui_language);
   init_logger(paths::log_dir(), cfg.log_level, have_console);
   FR_LOG_INFO("[APP] FlashRec 启动 v{}（控制台={}）", FLASHREC_VERSION,
               have_console ? "on" : "off");
@@ -475,7 +496,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> skin_ids, skin_names;
   for (const auto& s : skin_pack) {
     skin_ids.push_back(s.meta.id);
-    skin_names.push_back(s.meta.name.empty() ? s.meta.id : s.meta.name);
+    skin_names.push_back(skin_display_name(s.meta));  // d364：按语言取名
   }
   int cur0 = 0;
   for (int i = 0; i < (int)skin_ids.size(); ++i)
@@ -569,7 +590,6 @@ int main(int argc, char** argv) {
     render.set_always_on_top(on);
     cfg.ui_always_on_top = on;  // 运行值同步（Config 对象其余字段不动）
   };
-  bool pip_had_picture = false;                     // 小窗内出现过画面（消失则自动退回大窗）
   int pip_x = 0, pip_y = 0, pip_w = 0, pip_h = 0;   // 进入前窗口矩形
   constexpr int kPipW = 420, kPipH = 236;           // 16:9 小窗
   // 画中画的"单击恢复 vs 按住拖动"判定（d25，用户定的两条规则）：
@@ -984,6 +1004,30 @@ int main(int argc, char** argv) {
     show_osd(3, always_on_top ? 8 : 9);  // d32 动作反馈：8 置顶开 9 置顶关（d342）
     FR_LOG_INFO("[APP] 窗口置顶 = {}（已落盘）", always_on_top);
   };
+  // v0.6.2 d362：UI 语言切换（托盘勾选 / 右键语言子菜单共用；右键菜单走
+  // LanguageChanged 意图进同一 lambda）。做四件事：设语言（原子量，渲染线程
+  // tr() 下帧即新值）→ 落盘 → 托盘 tooltip 同步 → 回推渲染线程全帧重绘。
+  auto apply_language = [&](i18n::Lang lang) {
+    i18n::set_lang(lang);
+    Config::patch(paths::config_file(),
+                  {{"ui", "language",
+                    lang == i18n::Lang::ZhCn ? "\"zh-CN\"" : "\"en-US\""}});
+    tray::set_tooltip(tr(i18n::StrId::TrayTooltip));  // 未挂托盘 = 空操作
+    // d364：皮肤显示名随语言热切换 —— 按新语言重建名称列表回推渲染线程
+    //（id 与当前下标不变，仅显示名换；两列表同源同长，直接按下标覆盖）。
+    for (size_t i = 0; i < skin_pack.size() && i < skin_names.size(); ++i)
+      skin_names[i] = skin_display_name(skin_pack[i].meta);
+    {
+      int skin_cur = 0;
+      for (int i = 0; i < (int)skin_ids.size(); ++i)
+        if (skin_ids[i] == cfg.skin) skin_cur = i;
+      render.set_skin_list(skin_ids, skin_names, skin_cur);
+    }
+    render.set_language((int)lang);                   // force_dirty 全帧重绘
+    show_osd(3, lang == i18n::Lang::ZhCn ? 14 : 15);  // 动作反馈（d362）
+    FR_LOG_INFO("[APP] UI 语言 = {}（已落盘）",
+                lang == i18n::Lang::ZhCn ? "zh-CN" : "en-US");
+  };
   // v0.6.1 d343/d346：数字键 1/2/3/4 快速缩放 + 步进扩展 —— 目标窗口 = 视频**显示
   // 尺寸**（SAR 修正，video-out-params/dw/dh）× 档位系数；高 = 舞台高 + 顶栏（复用
   // 主循环 d281 的 stage 换算口径：窗口模式下舞台 = 窗口高 − topBarH，此处是它的
@@ -1238,7 +1282,7 @@ int main(int argc, char** argv) {
     skin_names.clear();
     for (const auto& s : skin_pack) {
       skin_ids.push_back(s.meta.id);
-      skin_names.push_back(s.meta.name.empty() ? s.meta.id : s.meta.name);
+      skin_names.push_back(skin_display_name(s.meta));  // d364：按语言取名
     }
     int idx = 0;
     for (int i = 0; i < (int)skin_ids.size(); ++i)
@@ -1510,6 +1554,11 @@ int main(int argc, char** argv) {
           FR_LOG_INFO("[APP] 窗口置顶 = {}（已落盘）", it.flag);
         }
         break;
+      case UiIntent::Kind::LanguageChanged:
+        // v0.6.2 d362：右键语言子菜单入口 —— 与托盘勾选共用 apply_language
+        //（设语言 + 落盘 + 托盘 tooltip + set_language 回推全帧重绘）。
+        apply_language(it.value < 0.5 ? i18n::Lang::ZhCn : i18n::Lang::EnUs);
+        break;
     }
     render.wake();
   };
@@ -1562,34 +1611,38 @@ int main(int argc, char** argv) {
   //   而不是"隐到托盘"。诊断完记得去掉这个开关再让用户碰。
   const bool dbg_no_tray = std::getenv("FR_DBG_NO_TRAY") != nullptr;
   tray_active = !dbg_no_tray && tray::create(
-      window.raw(), "FlashRec 投屏接收", paths::asset_file("icons/app_32.png").c_str(),
+      window.raw(), tr(i18n::StrId::TrayTooltip),  // d362：tooltip 随当前语言
+      paths::asset_file("icons/app_32.png").c_str(),
       TrayCallbacks{
           .menu_provider =
               [&] {
                 std::vector<TrayMenuItem> items;
+                // v0.6.2 d362：托盘菜单标签走 i18n（menu_provider 每次打开实时
+                // 构建，语言热切换后下一开即新语言，无需额外刷新）
                 TrayMenuItem show;
                 show.id = 1;
                 show.label = glfwGetWindowAttrib(window.raw(), GLFW_VISIBLE)
-                                 ? std::string("隐藏主窗口")
-                                 : std::string("显示主窗口");
+                                 ? std::string(tr(i18n::StrId::TrayHide))
+                                 : std::string(tr(i18n::StrId::TrayShow));
                 items.push_back(show);
                 items.push_back(TrayMenuItem::Sep());
                 PlaybackSnapshot s = bus.snapshot();
                 TrayMenuItem pp;
                 pp.id = 2;
-                pp.label = s.state == TransportState::Playing ? std::string("暂停")
-                                                              : std::string("播放");
+                pp.label = s.state == TransportState::Playing
+                               ? std::string(tr(i18n::StrId::TrayPause))
+                               : std::string(tr(i18n::StrId::TrayPlay));
                 pp.enabled = !s.uri.empty();
                 items.push_back(pp);
                 TrayMenuItem nx;
                 nx.id = 3;
-                nx.label = "下一集";
+                nx.label = tr(i18n::StrId::TrayNext);
                 items.push_back(nx);
                 // v0.6.1 d342：窗口置顶勾选项（与右键菜单同真值 always_on_top）
                 {
                   TrayMenuItem top;
                   top.id = 4;
-                  top.label = "窗口置顶";
+                  top.label = tr(i18n::StrId::TrayAlwaysTop);
                   top.checked = always_on_top;
                   items.push_back(top);
                 }
@@ -1600,10 +1653,12 @@ int main(int argc, char** argv) {
                   for (int i = 0; i < n2; ++i) {
                     TrayMenuItem mw;
                     mw.id = 100 + ms[i].idx;
-                    char lbl[96];
-                    std::snprintf(lbl, sizeof(lbl), "投到屏幕 %d（%d×%d）%s", i + 1,
-                                  ms[i].w, ms[i].h, ms[i].primary ? "· 主屏" : "");
-                    mw.label = lbl;
+                    // d362：整句带占位（语序差异交给 trf 的 "{}" 顺序替换）
+                    mw.label = i18n::trf(
+                        i18n::StrId::TrayCastScreenFmt,
+                        {std::to_string(i + 1).c_str(), std::to_string(ms[i].w).c_str(),
+                         std::to_string(ms[i].h).c_str(),
+                         ms[i].primary ? tr(i18n::StrId::TrayPrimary) : ""});
                     items.push_back(mw);
                   }
                   if (n2 > 0) items.push_back(TrayMenuItem::Sep());
@@ -1613,12 +1668,28 @@ int main(int argc, char** argv) {
                 {
                   TrayMenuItem rl;
                   rl.id = 900;
-                  rl.label = "重载皮肤";
+                  rl.label = tr(i18n::StrId::TrayReloadSkin);
                   items.push_back(rl);
+                }
+                // v0.6.2 d362：语言勾选组（两项平铺）。SNI dbusmenu 菜单为严格
+                // 平铺结构（tray_sni_linux.cpp，id=index+1 映射），真子菜单需重写
+                // 其序列化且本机不可验 —— 托盘侧用平铺勾选对替代右键菜单的语言
+                // 子菜单（语义等价：勾选态镜像 i18n::lang，激活走 apply_language）。
+                {
+                  TrayMenuItem lz;
+                  lz.id = 20;
+                  lz.label = tr(i18n::StrId::LangZhName);
+                  lz.checked = i18n::lang() == i18n::Lang::ZhCn;
+                  items.push_back(lz);
+                  TrayMenuItem le;
+                  le.id = 21;
+                  le.label = tr(i18n::StrId::LangEnName);
+                  le.checked = i18n::lang() == i18n::Lang::EnUs;
+                  items.push_back(le);
                 }
                 TrayMenuItem quit;
                 quit.id = -1;
-                quit.label = "退出";
+                quit.label = tr(i18n::StrId::TrayQuit);
                 items.push_back(quit);
                 return items;
               },
@@ -1636,6 +1707,12 @@ int main(int argc, char** argv) {
                     break;
                   case 4:  // v0.6.1 d342：托盘切换窗口置顶（toggle_always_on_top 内含落盘+OSD）
                     toggle_always_on_top();
+                    break;
+                  case 20:  // v0.6.2 d362：托盘语言勾选（apply_language 内含落盘+tooltip+重绘）
+                    apply_language(i18n::Lang::ZhCn);
+                    break;
+                  case 21:
+                    apply_language(i18n::Lang::EnUs);
                     break;
                   case -1:  // 退出：统一走 on_quit_request（隐窗 + 置关闭，d117）
                     if (window.on_quit_request) window.on_quit_request();
@@ -1688,9 +1765,14 @@ int main(int argc, char** argv) {
     cast_last_uri = u;
     cast_last_at = tnow;
     FR_LOG_INFO("[CAST] 呈现管线触发 duplicate={} uri={}", ce.duplicate, ce.uri);
-    if (pip_mode) {  // 画中画 → 先退回窗口再走管线（Pip↔全屏互斥同款）
-      UiIntent it{UiIntent::Kind::Pip};
-      exec_intent(it);
+    if (pip_mode) {
+      // d366（用户拍板）：画中画重投屏**不退回窗口模式** —— 小窗原地续播新流。
+      // 仅兜底显窗（R3：投屏必现画面，覆盖托盘隐窗态）；不做选屏/摆位/自动全屏
+      //（P1–P4 是窗口形态语义，会把 420×236 恒置顶小窗打回常规窗）。
+      FR_LOG_INFO("[CAST] 画中画重投屏：原地续播，不改窗口形态");
+      ensure_window_shown(window);
+      publish_wake();
+      return;
     }
     MonitorInfo ms[8];
     const int n = collect_monitors(ms, 8);
@@ -1882,12 +1964,10 @@ int main(int argc, char** argv) {
       prev_uri = snap.uri;
     }
     {
-      const bool has_picture = snap.picture_ready && !snap.uri.empty();
-      if (pip_mode && pip_had_picture && !has_picture) {
-        UiIntent it{UiIntent::Kind::Pip};
-        exec_intent(it);
-      }
-      pip_had_picture = has_picture;
+      // d368（用户拍板）：画中画不再随「画面消失」（播放结束/停止）自动退回
+      // 窗口模式 —— 与 d366 重投屏原地续播同构：小窗空态（EmptyWaiting 待机
+      // 画面）持续等待下一轮投屏；退出画中画只走手动单击小窗。
+      // 原 pip_had_picture 自动退出逻辑随之移除（变量已删）。
     }
 
     // 7) 面板醒睡推进 + 光标显隐（d36）

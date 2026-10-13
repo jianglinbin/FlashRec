@@ -39,3 +39,4 @@ __pycache__/
 /models/
 /third_party/
 *.obj
+selftest_logs/

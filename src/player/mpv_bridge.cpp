@@ -46,6 +46,23 @@ bool MpvBridge::init() {
   }();
   if (mpv_trace)
     mpv_set_option_string(mpv_, "msg-level", "cplayer=v,demux=v,demux_lavf=v,ffmpeg=v,stream=v");
+  // d365 取证开关：任意 mpv 选项注入（初始化前生效）。分号分隔多项，值内不得含分号。
+  // 用途：渲染/解码链 A/B 隔离（如 FR_MPV_OPTS="vf-add=format=yuv420p" 强制
+  //   NV12→YUV420P CPU 转换，绕开硬解帧的 GL 上传路径）。纯诊断，默认不设。
+  if (const char* mo = std::getenv("FR_MPV_OPTS"); mo != nullptr && *mo != '\0') {
+    for (const char *p = mo, *q; *p; p = q) {
+      q = std::strchr(p, ';');
+      const char* end = q != nullptr ? q : p + std::strlen(p);
+      std::string kv(p, end);
+      const auto eq = kv.find('=');
+      if (eq != std::string::npos) {
+        mpv_set_option_string(mpv_, kv.substr(0, eq).c_str(), kv.substr(eq + 1).c_str());
+        FR_LOG_WARN("[MPV] FR_MPV_OPTS 注入: {} = {}", kv.substr(0, eq), kv.substr(eq + 1));
+      }
+      if (q == nullptr) break;
+      ++q;
+    }
+  }
   if (mpv_initialize(mpv_) < 0) {
     FR_LOG_ERROR("[MPV] mpv_initialize 失败");
     mpv_terminate_destroy(mpv_);

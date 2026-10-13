@@ -50,6 +50,14 @@ std::string find_cjk_font() {
   }
   return {};
 }
+
+std::string system_ui_language() {
+  // v0.6.2 d362：i18n「auto」探测 —— 跟随系统 UI 语言（≠ 区域格式设置）。
+  // 主语言码判定：中文（含繁体/各变体）→ zh-CN（UI 文案本就只有简中一张表），
+  // 其余一律 en-US 保守回落。i18n::init 只认这两个值。
+  LANGID lid = GetUserDefaultUILanguage();
+  return PRIMARYLANGID(lid) == LANG_CHINESE ? "zh-CN" : "en-US";
+}
 #else
 #include <unistd.h>
 #include <limits.h>
@@ -82,6 +90,16 @@ std::string find_cjk_font() {
   for (auto* p : candidates)
     if (fs::exists(p)) return p;
   return {};
+}
+
+std::string system_ui_language() {
+  // v0.6.2 d362：i18n「auto」探测 —— LC_ALL > LC_MESSAGES > LANG 依次取，
+  // "zh" 前缀 → zh-CN，其余（含探测不到）→ en-US 保守回落。
+  for (const char* var : {"LC_ALL", "LC_MESSAGES", "LANG"}) {
+    const char* v = getenv(var);
+    if (v && *v) return std::string(v).rfind("zh", 0) == 0 ? "zh-CN" : "en-US";
+  }
+  return "en-US";
 }
 #endif
 

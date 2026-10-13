@@ -6,6 +6,7 @@
 //   - 字段级容错：坏值/类型错/越界 → 保留默认 + 记 warn，绝不整份崩溃。
 //   - 结构性错误（JSON 语法 / 根非对象 / skins 缺失）→ 返回 false + err。
 //   - 零第三方依赖：自带极简 JSON 解析器（config.cpp 的 MiniJson 只支持扁平路径，不够用）。
+#include <map>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,10 @@ namespace fr {
 
 struct SkinMeta {
   std::string id, name, personality, risk;
+  // v0.6.2 d364：多语言皮肤名（方案 D，KDE .desktop 模式）。
+  // 数据源 = JSON 里 "name[后缀]" 键（后缀小写，如 "name[en-US]" → "en-us"）；
+  // 显示名取链见 main.cpp 的 skin_display_name：当前语言键 → name → 任意非空 → id。
+  std::map<std::string, std::string> localized_names;
 };
 struct NamedTheme {
   SkinMeta meta;

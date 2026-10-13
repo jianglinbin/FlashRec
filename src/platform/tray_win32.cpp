@@ -205,6 +205,16 @@ void remove() {
   }
 }
 
+void set_tooltip(const char* tooltip) {
+  // v0.6.2 d362：语言热切换 —— NIM_MODIFY 只改 szTip（须带 NIF_TIP 位）。
+  if (!g_hwnd || !tooltip) return;
+  g_nid.uFlags |= NIF_TIP;
+  const std::wstring tip = utf8_to_wide(tooltip);
+  wcsncpy(g_nid.szTip, tip.c_str(), 127);
+  g_nid.szTip[127] = L'\0';
+  Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+}
+
 }  // namespace tray
 
 }  // namespace fr

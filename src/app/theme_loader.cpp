@@ -35,6 +35,29 @@ struct JVal {
   }
 };
 
+// v0.6.2 d364：多语言皮肤名（方案 D，KDE .desktop 模式）。
+// 收集对象里所有 "name[后缀]" 键 → meta.localized_names（后缀统一小写：
+// "name[en-US]" → "en-us"；"name[]"/无 ']' 的畸形键忽略；非字符串值忽略）。
+void collect_localized_names(const JVal& obj, SkinMeta* meta) {
+  if (obj.t != JVal::Obj) return;
+  for (const auto& kv : obj.obj) {
+    if (kv.first.rfind("name[", 0) != 0) continue;
+    const size_t close = kv.first.find(']');
+    if (close == std::string::npos || close < 6) continue;  // "name[]" 空后缀
+    std::string suf = kv.first.substr(5, close - 5);
+    for (auto& c : suf) c = (char)std::tolower((unsigned char)c);
+    if (kv.second.t == JVal::Str) meta->localized_names[suf] = kv.second.s;
+  }
+}
+
+// name 与全部 name[xx] 均无有效值 → 该皮肤跳过加载（用户拍板 d364）。
+bool skin_name_missing(const SkinMeta& meta) {
+  if (!meta.name.empty()) return false;
+  for (const auto& kv : meta.localized_names)
+    if (!kv.second.empty()) return false;
+  return true;
+}
+
 class JParser {
  public:
   explicit JParser(const std::string& s) : s_(s) {}
@@ -588,6 +611,11 @@ static bool bundle_internal(const std::string& path, const Theme& base,
     }
     if (const JVal* v = s.get("name"))
       if (v->t == JVal::Str) nt.meta.name = v->s;
+    collect_localized_names(s, &nt.meta);
+    if (skin_name_missing(nt.meta)) {
+      if (warns) warns->push_back("皮肤[" + nt.meta.id + "] 缺 name/name[xx]，跳过");
+      continue;
+    }
     if (const JVal* v = s.get("personality"))
       if (v->t == JVal::Str) nt.meta.personality = v->s;
     if (const JVal* v = s.get("risk"))
@@ -660,6 +688,11 @@ bool load_skin_file(const std::string& path, const Theme& base, NamedTheme* out,
   }
   if (const JVal* v = root.get("name"))
     if (v->t == JVal::Str) out->meta.name = v->s;
+  collect_localized_names(root, &out->meta);
+  if (skin_name_missing(out->meta)) {
+    if (err) *err = "皮肤缺 name/name[xx]";
+    return false;
+  }
   if (const JVal* v = root.get("personality"))
     if (v->t == JVal::Str) out->meta.personality = v->s;
   if (const JVal* v = root.get("risk"))

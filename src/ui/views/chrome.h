@@ -143,6 +143,8 @@ enum class CtxAction {
   DecodeMenu, DecodeSw, DecodeAuto, DecodeNvdec, DecodeDxva2,
   // v0.6.1 d354：窗口缩放档位上限 300% → 500%（新增三档；数字键 1–7 同步扩展）。
   Zoom300, Zoom400, Zoom500,
+  // v0.6.2 d362：UI 语言二级子菜单（「语言」父条目 + 两项；勾选 = i18n::lang 镜像）。
+  LanguageMenu, LanguageZh, LanguageEn,
 };
 
 struct CtxMenuItem {

@@ -130,6 +130,7 @@
   {
    "id": "nord-snow",
    "name": "北境·雪",
+   "name[en]": "Nord Snow",
    "personality": "Nord Snow Storm：白底 + nord10 靛蓝，圆角，清爽",
    "shape": {
     "windowRadius": 12.0,
@@ -206,6 +207,7 @@
   {
    "id": "nord-frost",
    "name": "北境·冰",
+   "name[en]": "Nord Frost",
    "personality": "Nord Frost：冰蓝底 + 直角、方进度点，冷冽",
    "shape": {
     "windowRadius": 0.0,
@@ -283,6 +285,7 @@
   {
    "id": "nord-rose",
    "name": "北境·霞",
+   "name[en]": "Nord Rose",
    "personality": "Nord Aurora：粉底 + nord11 玫红，圆角，柔和",
    "shape": {
     "windowRadius": 16.0,
@@ -357,6 +360,7 @@
   {
    "id": "nord-iris",
    "name": "北境·紫",
+   "name[en]": "Nord Iris",
    "personality": "Nord Aurora：紫底 + nord15 紫罗兰，大圆角、内嵌卡",
    "shape": {
     "windowRadius": 20.0,
@@ -433,6 +437,7 @@
   {
    "id": "nord-night",
    "name": "北境·夜",
+   "name[en]": "Nord Night",
    "personality": "Nord Polar Night：极夜深灰 + frost 冰蓝，直角、方点，经典",
    "shape": {
     "windowRadius": 0.0,
@@ -509,6 +514,7 @@
   {
    "id": "nord-forest",
    "name": "北境·林",
+   "name[en]": "Nord Forest",
    "personality": "Nord Aurora：绿底 + nord14 林绿，小圆角、内嵌卡",
    "shape": {
     "windowRadius": 8.0,
@@ -585,6 +591,7 @@
   {
    "id": "ubuntu-orange",
    "name": "暗灰橙",
+   "name[en]": "Graphite Orange",
    "personality": "GNOME/Ubuntu 深色设置页：导航栏深灰作渲染区底色，面板灰作其他区域，选中灰作悬浮、更白一档作按下，Ubuntu 橙作强调（进度/徽标/播放键）",
    "risk": "橙色强调较抢眼，浅色画面下进度条对比略高",
    "shape": {

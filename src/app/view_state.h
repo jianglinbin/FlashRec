@@ -64,6 +64,7 @@ struct UiIntent {
     ToggleHelp,     // v0.6.1 d350：F1 帮助面板开关（F1/点击面板 → 统一经意图切换）
     DecodeMode,     // v0.6.1 d353：解码方式（右键子菜单；value = 0 软解/1 自动/2 NVDEC/3 DXVA2）
     VideoZoomReset,  // v0.6.1 d356：画面缩放复位 100%（Ctrl+中键；平移一并归零）
+    LanguageChanged,  // v0.6.2 d362：UI 语言切换（右键语言子菜单；value = 0 zh-CN / 1 en-US）
   };
   // R1：可持久化 UI 偏好 id（UiPrefChanged 的 pref 载荷；与 settings.json 键一一对应）
   // v0.6.1 d342：AlwaysOnTop = ui.always_on_top（窗口置顶，独立于画中画）。

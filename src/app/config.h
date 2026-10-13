@@ -34,6 +34,7 @@ struct Config {
   bool ui_show_info = false;                   // d45→d146：完整媒体信息徽章总开关（右键菜单唯一勾选项）
   bool ui_cast_auto_fullscreen = false;        // R2：投屏自动全屏（默认关 = 静默投屏，决策点 4）
   bool ui_always_on_top = false;               // v0.6.1 d342：窗口置顶（独立于画中画；右键/托盘勾选，落盘）
+  std::string ui_language = "auto";            // v0.6.2 d362：UI 语言（auto|zh-CN|en-US；auto=跟随系统）
   std::string ui_window_prefer = "last";       // R4：目标屏优先序 last/cursor/primary
   std::vector<MonitorMemory> ui_window_monitors;  // R4：按屏记忆（解析自 ui.window.monitors[]）
   std::vector<std::string> protocol_info;      // 空 = 用默认 Sink 串（不硬编码在 dmr/）

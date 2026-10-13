@@ -25,7 +25,7 @@ GetTransportInfo/GetPositionInfo）。而 DLNA 规格里进度/状态还有第�
 
 用法：
   python tests/gena_subscribe_check.py                       # 自动探测端点
-  python tests/gena_subscribe_check.py --host 192.168.2.99:49152
+  python tests/gena_subscribe_check.py --host 192.0.2.1:49152
 退出码 0 = 全绿。
 """
 from __future__ import annotations
@@ -171,7 +171,7 @@ def main() -> int:
 
     host = args.host
     if not host:
-        for cand in ("127.0.0.1:49152", "192.168.2.99:49152"):
+        for cand in ("127.0.0.1:49152", "192.0.2.1:49152"):
             try:
                 ip, port = cand.rsplit(":", 1)
                 socket.create_connection((ip, int(port)), timeout=3).close()

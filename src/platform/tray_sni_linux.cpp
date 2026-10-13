@@ -44,6 +44,7 @@ class SniBackend final : public Backend {
               const TrayCallbacks& cb) override;
   void poll() override;
   void remove() override;
+  void set_tooltip(const char* tooltip) override;
 
   // 菜单数据：每次请求实时取（与 Windows 一致，标签可随播放态变化）。
   // dbusmenu item id = provider 数组索引 + 1（0 固定为根）。
@@ -535,6 +536,15 @@ void SniBackend::poll() {
     if (r <= 0) break;
   }
   sd_bus_flush(bus_);  // 尽力发出排队信号；小消息非阻塞级延迟
+}
+
+void SniBackend::set_tooltip(const char* tooltip) {
+  // v0.6.2 d362：语言热切换 —— SNI 无独立 tooltip 属性，宿主悬停显示 Title；
+  // 改 title_ + 广播属性变化让面板重新拉取。
+  if (!bus_ || !tooltip) return;
+  title_ = tooltip;
+  sd_bus_emit_properties_changed(bus_, kSniPath, kSniIface, "Title", nullptr);
+  sd_bus_flush(bus_);
 }
 
 void SniBackend::remove() {

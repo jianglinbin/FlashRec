@@ -9,10 +9,10 @@ VMware 虚拟网卡）完全可以本机自测：把 UDP 套接字**绑到指定
 
 用法：
     python tests/multi_nic_check.py                 # 自动枚举本机 IPv4，逐个网段自测
-    python tests/multi_nic_check.py --src 192.168.2.99 --src 192.168.32.1
+    python tests/multi_nic_check.py --src 192.0.2.1 --src 192.0.2.2
     python tests/multi_nic_check.py --port 49152
-    python tests/multi_nic_check.py --expect-all 192.168.32.1   # 负向对照（旧版行为）
-    python tests/multi_nic_check.py --watch 192.168.32.1        # 单网卡收 NOTIFY
+    python tests/multi_nic_check.py --expect-all 192.0.2.2   # 负向对照（旧版行为）
+    python tests/multi_nic_check.py --watch 192.0.2.2        # 单网卡收 NOTIFY
     python tests/multi_nic_check.py --watch-all                 # P5：所有网卡收 NOTIFY
 
 判定标准：

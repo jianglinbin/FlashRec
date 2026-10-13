@@ -8,6 +8,7 @@
 #include <nanovg.h>
 
 #include "app/event_bus.h"
+#include "app/i18n.h"  // v0.6.2 d362：界面文案多语言
 #include "app/log.h"
 #include "ui/theme.h"
 #include "ui/views/chrome.h"
@@ -61,24 +62,22 @@ void draw_player_view(NVGcontext* vg, const Theme& t, float w, float h,
       // AIRPLAY_EMBED_PLAN.md:172。保持期（has_session）沿用最后一会话的来源）
       if (snap.has_session) {
         if (snap.source == CastSource::AirPlay)
-          badge("AirPlay 投屏");
+          badge(tr(i18n::StrId::BadgeAirplay));
         else
-          badge("DLNA 投屏");
+          badge(tr(i18n::StrId::BadgeDlna));
       }
       // d310：解码方式徽章（标题栏常驻、无任何开关；与「媒体信息」面板是两回事）。
       // 空 = 取不到不画不猜；"no" = 软解；其余 = 硬解 + 后端名（如 d3d11va）。
       if (in.hwdec[0] != '\0') {
         if (std::strcmp(in.hwdec, "no") == 0) {
-          badge("软解");
+          badge(tr(i18n::StrId::BadgeSwDecode));
         } else {
-          char hb[48];
-          snprintf(hb, sizeof(hb), "硬解 %s", in.hwdec);
-          badge(hb);
+          badge(i18n::trf(i18n::StrId::BadgeHwFmt, {in.hwdec}).c_str());  // d362
         }
       }
       // d124：软件渲染兜底提示 —— 让用户知道"画面是 CPU 出的、硬件加速没生效"，
       // 而不是看不出区别（老显卡驱动编译不了 mpv 的 GLSL 时会自动降级到这条路）
-      if (in.sw_video) badge("软件渲染");
+      if (in.sw_video) badge(tr(i18n::StrId::BadgeSwRender));
     }
     draw_win_buttons(vg, t, w, in, cb, clip);
     draw_skin_button(vg, t, w, in, cb, clip);  // d182：顶栏皮肤按钮
