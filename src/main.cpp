@@ -17,6 +17,11 @@
 #include <thread>   // d282：看门狗验收钩子（主线程人工卡死）
 #include <vector>
 
+// ★包含顺序铁律：log.h（→ spdlog → os-inl.h → windows.h）必须先于 glfw3.h——
+// glfw3.h 把 APIENTRY 定义为 __stdcall 且不撤销，后到的 minwindef.h 重定义成
+// WINAPI 会产生 C4005 宏重定义警告；windows.h 先到则 glfw3.h 检测已定义直接跳过。
+#include "app/log.h"
+
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
@@ -29,7 +34,6 @@
 #endif
 #include "app/event_bus.h"
 #include "app/i18n.h"  // v0.6.2 d362：界面文案多语言
-#include "app/log.h"
 #include "app/theme_loader.h"  // d180：JSON 皮肤加载（M1）
 #include "app/render_loop.h"
 #include "app/view_state.h"
@@ -38,6 +42,7 @@
 #include "cast/airplay/airplay_source.h"  // v0.6.0：AirPlay 门面（d269 M0 装配）
 #endif
 #include "platform/net_if.h"   // 多网卡（d110）：启动打印候选接口
+#include "platform/autostart.h"  // d437：托盘「开机启动」
 #include "platform/clipboard.h"
 #include "platform/console.h"  // 运行时控制台（--console）+ UTF-8（d163）
 #include "platform/keep_awake.h"
@@ -407,7 +412,9 @@ int main(int argc, char** argv) {
   if (!player.init()) {
     FR_LOG_ERROR("[APP] mpv 初始化失败（继续运行，投屏不可用）");
   }
-  player.set_panscan(theme.layout.stageCover ? 1.0 : 0.0);  // d184：视频填充 cover 默认
+  // ★d425：画面填充模式（player.fit_mode 持久偏好，默认自动）。d427：皮肤不再
+  //   参与填充 —— 原 d184 的 set_panscan(stageCover) 路径退役（FIT_MODE_PLAN §三.7）。
+  player.set_fit_mode(cfg.player_fit_mode);
   // d196：留边底色 = 皮肤 stageBg（contain 时 letterbox 不再是 mpv 默认黑）
   auto stage_bg_rgb = [](const NVGcolor& c) {
     char b[8];
@@ -591,7 +598,8 @@ int main(int argc, char** argv) {
     cfg.ui_always_on_top = on;  // 运行值同步（Config 对象其余字段不动）
   };
   int pip_x = 0, pip_y = 0, pip_w = 0, pip_h = 0;   // 进入前窗口矩形
-  constexpr int kPipW = 420, kPipH = 236;           // 16:9 小窗
+  constexpr int kPipW = 420, kPipH = 236;           // 16:9 小窗（默认尺寸）
+  int pip_last_w = kPipW, pip_last_h = kPipH;       // 本次运行最后一次小窗尺寸（仅内存）
   // 画中画的"单击恢复 vs 按住拖动"判定（d25，用户定的两条规则）：
   //   1. 弹起位置与按下位置相距 > kPipDragPx → 拖动意图（进入 OS 拖拽）；
   //   2. 按下超过 200ms 仍未弹起 → 拖动意图。
@@ -731,8 +739,12 @@ int main(int argc, char** argv) {
       pan_last_x = (float)x;
       pan_last_y = (float)y;
       const double zf = video_zoom_pct / 100.0;
-      video_pan_x += dx / (double)window.width() / zf;
-      video_pan_y += dy / (double)window.height() / zf;
+      // d439：位移与分母单位必须一致。x/y 是 DIP（dip_scale 换算后），分母若用
+      // 物理像素，高 DPI 下平移量会小 scale 倍（150% 只走 2/3）。
+      const double lw = std::max(1, window.logical_width());
+      const double lh = std::max(1, window.logical_height());
+      video_pan_x += dx / lw / zf;
+      video_pan_y += dy / lh / zf;
       player.set_video_pan(video_pan_x, video_pan_y);
       publish_wake();
       return;
@@ -783,6 +795,11 @@ int main(int argc, char** argv) {
       }
       window.set_pos(nx, ny);
       window.set_window_size(nw, nh);
+      // 画中画：记本次运行的最后尺寸（含焦点丢失打断的路径），下次进小窗沿用
+      if (pip_mode) {
+        pip_last_w = nw;
+        pip_last_h = nh;
+      }
       publish_wake();
       return;
     }
@@ -796,8 +813,10 @@ int main(int argc, char** argv) {
         return;
       }
     }
-    // 边缘带光标暗示（非拖拽、非 pip、窗口态）：贴边/贴角即换 resize 光标
-    if (!pip_mode && !window.fullscreen() && !window.maximized())
+    // 边缘带光标暗示（非拖拽）：贴边/贴角即换 resize 光标。
+    // d442：画中画同样可拖边缩放；最大化态仅画中画放行（小窗自管矩形，
+    // Win32 的 SetWindowPos 在 maximized 标记下仍能改实际尺寸）。
+    if (!window.fullscreen() && (!window.maximized() || pip_mode))
       window.update_cursor_for_edge(
           WindowGLFW::hit_window_edge(window.logical_width(), window.logical_height(), in.mx, in.my));
     // 面板唤醒防抖（d36）：面板隐藏后光标位移超过阈值才算"有效移动"；
@@ -829,6 +848,19 @@ int main(int argc, char** argv) {
     if (button == GLFW_MOUSE_BUTTON_RIGHT) {
       // d45：右键状态透传给渲染线程（按下/弹起边沿检测、防抖与开菜单都在那边 ——
       // 菜单几何/绘制/hit-test 与 chrome 同源，归渲染线程）
+      // d438：按下时顺便定死弹出可用区（窗口 ∩ 锚点所在显示器工作区）。GLFW 窗口/
+      // 显示器查询只在主线程做，渲染线程只消费这两个纯数据字段。
+      if (action == GLFW_PRESS) {
+        float pl = 0, pt = 0, pr = 0, pb = 0;
+        if (window.popup_area_ui(in.mx, in.my, &pl, &pt, &pr, &pb)) {
+          in.popup_l = pl;
+          in.popup_t = pt;
+          in.popup_r = pr;
+          in.popup_b = pb;
+        } else {
+          in.popup_l = in.popup_t = in.popup_r = in.popup_b = 0;
+        }
+      }
       in.down_right = action == GLFW_PRESS;
       publish_wake();
       return;
@@ -857,12 +889,31 @@ int main(int argc, char** argv) {
     }
     if (pip_mode) {
       if (action == GLFW_PRESS) {
+        // d442：画中画边缘带优先 = 拖拽缩放（与普通窗口同一边缘几何）。
+        // 内部区域仍保留 d25 的语义：快速单击恢复 / 按住移动小窗。
+        const WindowGLFW::WinEdge e = WindowGLFW::hit_window_edge(
+            window.logical_width(), window.logical_height(), in.mx, in.my);
+        if (e != WindowGLFW::WinEdge::None) {
+          pip_pressed = false;
+          pip_drag = false;
+          win_drag_start_resize(e);
+          publish_wake();
+          return;
+        }
         // 画中画：记录按下，等待"移动/超时 → 拖动"或"原地弹起 → 恢复"
         pip_pressed = true;
         pip_drag = false;
         pip_press_t = mono_now();
         pip_press_x = in.mx;
         pip_press_y = in.my;
+      } else if (win_resize_drag) {
+        // 缩放结束：尺寸已在移动时记入 pip_last_*（见 on_mouse_move），
+        // 本次按下不再判定"恢复"
+        win_resize_drag = false;
+        resize_edge = WindowGLFW::WinEdge::None;
+        window.set_resizing(false);
+        pip_pressed = false;
+        pip_drag = false;
       } else if (win_move_drag) {
         // 统一拖拽结束（d39）：拖动后弹起，不再判定"恢复"
         win_move_drag = false;
@@ -919,10 +970,10 @@ int main(int argc, char** argv) {
     // 内容，不进 pan（Ctrl+左键在 100% 时无动作）。——
     if (in.down && !pip_mode && (mods & GLFW_MOD_CONTROL) && !pan_drag &&
         video_zoom_pct > 100 && bus.snapshot().has_session) {
-      const float topbar_phys =
-          window.fullscreen() ? 0.f
-                              : theme.layout.topBarH * window.content_scale();
-      if (in.my > topbar_phys) {  // 舞台区（窗口坐标=物理，顶栏占顶部）
+      // d439：in.my 与 theme.layout.topBarH 同为 DIP，直接比较；此前把 token 乘
+      // content_scale 当物理像素，高 DPI 下阈值偏大，顶栏内的 Ctrl+按下会误入平移。
+      const float topbar_h = window.fullscreen() ? 0.f : theme.layout.topBarH;
+      if (in.my > topbar_h) {  // 舞台区（DIP 坐标，顶栏占顶部）
         pan_drag = true;
         pan_last_x = in.mx;
         pan_last_y = in.my;
@@ -974,6 +1025,12 @@ int main(int argc, char** argv) {
     // 无条件 publish 兜底出画；调用点在 publish_only 之后改动的路径同样被覆盖）。
     publish_wake();
   };
+  // ★d432：解码 OSD id 表（与 chrome.cpp kind3 的 case 10–13 / 16–19 一一对应）。
+  //   16–19 = AirPlay 会话中挂起，文案追加「投屏中无法切换，下次生效」。
+  auto decode_osd_id = [](int m) { return m == 1 ? 10 : m == 0 ? 11 : m == 2 ? 12 : 13; };
+  auto decode_pending_osd_id = [](int m) {
+    return m == 1 ? 16 : m == 0 ? 17 : m == 2 ? 18 : 19;
+  };
   auto play_pause = [&]() {
     PlaybackSnapshot s = bus.snapshot();
     DmrCommand c;
@@ -1004,8 +1061,8 @@ int main(int argc, char** argv) {
     show_osd(3, always_on_top ? 8 : 9);  // d32 动作反馈：8 置顶开 9 置顶关（d342）
     FR_LOG_INFO("[APP] 窗口置顶 = {}（已落盘）", always_on_top);
   };
-  // v0.6.2 d362：UI 语言切换（托盘勾选 / 右键语言子菜单共用；右键菜单走
-  // LanguageChanged 意图进同一 lambda）。做四件事：设语言（原子量，渲染线程
+  // v0.6.2 d362：UI 语言切换（托盘勾选入口；右键语言子菜单已于 d421 撤除）。
+  // 做四件事：设语言（原子量，渲染线程
   // tr() 下帧即新值）→ 落盘 → 托盘 tooltip 同步 → 回推渲染线程全帧重绘。
   auto apply_language = [&](i18n::Lang lang) {
     i18n::set_lang(lang);
@@ -1044,7 +1101,9 @@ int main(int argc, char** argv) {
     // v0.6.1 d357：画中画同样生效（用户需求）——数字键 1–7 在小窗内缩放窗口；
     // 全屏/最大化仍排除（窗口矩形由系统管理）。右键菜单在画中画本就不弹
     //（渲染线程进小窗即收弹层），数字键是唯一入口，语义自洽。
-    if (window.fullscreen() || window.maximized()) return;
+    // d439：最大化态进画中画时 OS 的 maximized 标记仍保留（见 Pip 意图），
+    // 小窗矩形由我们自己管理 —— 画中画内不能再被这条守卫挡住缩放。
+    if (window.fullscreen() || (window.maximized() && !pip_mode)) return;
     if (!bus.snapshot().has_session) return;
     int vw = 0, vh = 0;
     if (!player.video_display_size(&vw, &vh) || vw <= 0 || vh <= 0) return;
@@ -1110,6 +1169,7 @@ int main(int argc, char** argv) {
       player.set_video_pan(0.0, 0.0);
     }
     show_osd(6, (double)pct);  // d350：画面缩放反馈（kind6，「画面 N%」）
+    render.set_video_zoom_pct(pct);  // 右键菜单勾选镜像回推（键盘/菜单/复位共用此入口）
     FR_LOG_INFO("[APP] 画面缩放 {}%（video-zoom={:+.3f}）", pct, z);
   };
   // 键盘拖动进度状态（d29）：左右键按住 = 进度条动 + 预览，**不 seek**；抬起才提交
@@ -1119,6 +1179,29 @@ int main(int argc, char** argv) {
   window.on_mouse_enter = [&](bool entered) {
     mouse_inside = entered;   // d36：光标显隐前提之一；离开窗口立即恢复光标显示
     publish_only();
+  };
+  // d440：窗口失焦 = 本次交互作废。GLFW（以及 Win32 的 WM_CAPTURECHANGED）在焦点
+  // 被系统/别的窗口抓走时不会补发按键抬起：主线程的 in.down、拖拽/平移/键盘拖动
+  // 状态，以及渲染线程的边沿基准都会卡在「按下」。这里先登记复位请求、再复位并
+  // 发布输入 —— 顺序不能反：复位请求必须先于新快照可见，渲染线程无论在哪一帧
+  // 消费请求，都会先把指针状态清成 Idle，之后才可能看到「抬起」，不会合成点击。
+  window.on_focus_lost = [&] {
+    render.request_input_reset();
+    in.down = false;
+    in.down_middle = false;
+    in.down_right = false;
+    in.kb_progress = false;
+    pan_drag = false;
+    render.set_pan_drag(false);
+    pip_pressed = false;
+    pip_drag = false;
+    win_move_drag = false;
+    win_move_system = false;
+    win_resize_drag = false;
+    resize_edge = WindowGLFW::WinEdge::None;
+    window.set_resizing(false);
+    kb_progress = false;
+    publish_wake();
   };
   window.on_key = [&](int key, int action, int mods) {
     // —— 左右键抬起：键盘拖动结束，此刻才真正 seek（d29 问题 1）——
@@ -1177,6 +1260,8 @@ int main(int argc, char** argv) {
         break;
       case GLFW_KEY_F1:
         // v0.6.1 d350：F1 = 帮助面板开关（全部快捷键一览；再按 F1/点击/ESC 关闭）
+        // d441：画中画无帮助面板（进小窗即收），F1 不再在无面板的小窗里翻转镜像。
+        if (pip_mode) break;
         channel.post_intent(UiIntent{UiIntent::Kind::ToggleHelp});
         publish_wake();
         break;
@@ -1253,13 +1338,11 @@ int main(int argc, char** argv) {
     theme = skin_pack[idx].theme;
     render.set_theme(skin_pack[idx].theme);
     render.set_skin_list(skin_ids, skin_names, idx);
-    // ★d295：镜像自适应填充（d281）期间**不下发** panscan —— 皮肤 stageCover 会把已判定的
-    //   自适应结果覆盖掉（真机 16:24:03 实测：panscan 1→0，画面由上下铺满退回上下黑边）。
-    //   自适应由 player_controller 每 0.5s 按「视频比例 vs 舞台比例」重判，皮肤改不动它。
-    if (player.fit_auto_active())
-      player.restore_fit_after_skin_change();
-    else
-      player.set_panscan(theme.layout.stageCover ? 1.0 : 0.0);  // d184：随皮肤更新填充
+    // ★d427：皮肤不再参与画面填充 —— panscan 归「画面填充」模式（player.fit_mode）
+    //   管，与皮肤无关，d184 的 stageCover 下发路径与 d295 的
+    //   restore_fit_after_skin_change 闸门一并退役（皮肤不再碰 panscan，无覆盖可防）。
+    //   切皮肤导致的舞台比例变化（顶栏高度可能不同）由主循环 set_stage_aspect 推送，
+    //   Auto 模式自适应重判；固定档（铺满/完整画面/拉伸）画面不随皮肤跳变。
     player.set_background_color(stage_bg_rgb(theme.stageBg));  // d196：随皮肤更新留边底色
     cfg.skin = skin_pack[idx].meta.id;
     Config::patch(paths::config_file(), {{"ui", "skin", "\"" + cfg.skin + "\""}});
@@ -1338,14 +1421,19 @@ int main(int argc, char** argv) {
           const bool global = WindowGLFW::global_cursor(&gx, &gy);
           float fx = 0.5f;
           int grab_dy = std::max(0, (int)in.my);
+          int wx, wy, ww, wh;
+          window.pos_size(&wx, &wy, &ww, &wh);
+          // d441：系统最大化（Win+↑/系统菜单）不经 ToggleMaximize 意图，norm_* 仍
+          // 全 0（窗口还带 maximized 标记时 pos_size 给的是最大化矩形）。用当前
+          // 矩形兜底，至少保证抓取点映射有个合理宽度，不会把窗口甩到光标右侧。
+          const int restore_w = norm_w > 0 ? norm_w : ww;
+          const int restore_h = norm_h > 0 ? norm_h : wh;
           if (global) {
-            int wx, wy, ww, wh;
-            window.pos_size(&wx, &wy, &ww, &wh);
             if (ww > 0) fx = std::clamp((float)(gx - wx) / (float)ww, 0.f, 1.f);
             grab_dy = std::max(0, gy - wy);
           }
           window.toggle_maximized();  // 还原（Win 同步生效；X11 异步 → 下面的锚定矩形兜底）
-          const int tx = gx - (int)(fx * (float)norm_w);
+          const int tx = gx - (int)(fx * (float)restore_w);
           const int ty = gy - grab_dy;
           window.set_pos(tx, ty);
           // 接管 d39 跟手机：锚 = 计算出的还原矩形 + 当前光标
@@ -1353,7 +1441,7 @@ int main(int argc, char** argv) {
           drag_global = global;
           drag_gx0 = gx; drag_gy0 = gy;
           drag_px0 = (float)gx; drag_py0 = (float)gy;
-          drag_wx0 = tx; drag_wy0 = ty; drag_ww0 = norm_w; drag_wh0 = norm_h;
+          drag_wx0 = tx; drag_wy0 = ty; drag_ww0 = restore_w; drag_wh0 = restore_h;
         } else {
           win_drag_start_move();
         }
@@ -1378,13 +1466,24 @@ int main(int argc, char** argv) {
           // 全屏下直接进画中画是未定义行为：窗口还挂在显示器上（fullscreen 态），
           // 对全屏窗口 set_window_size 实测把整个显示器变黑（d24 用户实测）。
           // 故必须先退全屏（还原到进入前的窗口矩形），再取矩形、再缩进小窗。
+          // d439：最大化态**不退最大化**（X11 退最大化是异步的，紧接着改小窗
+          // 尺寸会被 WM 随后的还原矩形覆盖）——保留 OS 的 maximized 标记，小窗
+          // 矩形由下面 set_window_size/move_to_workarea_corner 直接管理；窗口
+          // 圆角与数字键缩放按「画中画优先」的特例放行（render_loop/main 侧）。
           if (window.fullscreen()) window.toggle_fullscreen();
+          // d441：帮助面板与画中画互斥 —— 渲染线程也会在进小窗时收面板，但主线程
+          // 镜像必须同步清零，否则 ESC/F1 会以为面板还开着（分层收起错乱）。
+          if (help_open) {
+            help_open = false;
+            render.set_help(false);
+          }
           pip_mode = true;
           render.set_pip(true);
           window.pos_size(&pip_x, &pip_y, &pip_w, &pip_h);
           window.set_floating(true);
-          window.set_window_size(kPipW, kPipH);
-          window.move_to_workarea_corner(kPipW, kPipH);
+          // d442：沿用本次运行最后一次拖拽缩放后的尺寸（未缩放过 = 420×236）
+          window.set_window_size(pip_last_w, pip_last_h);
+          window.move_to_workarea_corner(pip_last_w, pip_last_h);
           show_osd(3, 5);                           // d32：进入画中画反馈
         }
         break;
@@ -1463,12 +1562,19 @@ int main(int argc, char** argv) {
         // 专用解码器）/DXVA2 备选。重载会重置渲染属性 → 按当前画面缩放/平移重放。
         {
           const int m = (int)std::lround(it.value);
-          player.set_hwdec_mode(m);
-          player.set_video_zoom(std::log2(video_zoom_pct / 100.0));
-          player.set_video_pan(video_pan_x, video_pan_y);
-          show_osd(3, m == 1 ? 10 : m == 0 ? 11 : m == 2 ? 12 : 13);
-          FR_LOG_WARN("[APP] 解码方式 → {}（按位重载续播）",
-                      m == 0 ? "软解" : m == 1 ? "自动" : m == 2 ? "NVDEC" : "DXVA2");
+          const bool applied = player.set_hwdec_mode(m);
+          if (applied) {
+            player.set_video_zoom(std::log2(video_zoom_pct / 100.0));
+            player.set_video_pan(video_pan_x, video_pan_y);
+            show_osd(3, decode_osd_id(m));
+            FR_LOG_WARN("[APP] 解码方式 → {}（立即生效）",
+                        m == 0 ? "软解" : m == 1 ? "自动" : m == 2 ? "NVDEC" : "DXVA2");
+          } else {
+            // ★d432：AirPlay 单 IDR 约束 —— 只记录，下次 SetUri 的 loadfile 前生效。
+            show_osd(3, decode_pending_osd_id(m));
+            FR_LOG_WARN("[APP] 解码方式 → {}（AirPlay 会话中挂起，下次投屏生效）",
+                        m == 0 ? "软解" : m == 1 ? "自动" : m == 2 ? "NVDEC" : "DXVA2");
+          }
         }
         break;
       case UiIntent::Kind::VideoZoomReset:
@@ -1477,6 +1583,27 @@ int main(int argc, char** argv) {
         // 通道中转——lambda 前向引用坑第三次，d342/d350 同款）。
         set_video_zoom(100);
         break;
+      case UiIntent::Kind::VideoZoom:
+        // 右键菜单「画面缩放」档位（value = 百分比 50..500）。档位真值在主线程
+        // video_zoom_pct，set_video_zoom 内部守卫（无会话）可能拒绝——守卫态下
+        // 档位与勾选都不动；执行后经 render.set_video_zoom_pct 回推自然对齐。
+        set_video_zoom((int)std::lround(it.value));
+        break;
+      case UiIntent::Kind::FitMode: {
+        // d426：画面填充模式（右键「画面填充」子菜单；value = 0 自动/1 铺满/
+        // 2 完整画面/3 拉伸）。持久偏好（区别于会话级的画面缩放，不随会话重置）：
+        // 运行值 + 落盘 + 下发播放器（会话活跃立即生效，新会话由 handle_set_uri
+        // 按模式下初值）+ OSD kind7 + 渲染线程勾选回推。
+        const int m = std::clamp((int)std::lround(it.value), 0, 3);
+        cfg.player_fit_mode = m;
+        Config::patch(paths::config_file(), {{"player", "fit_mode", std::to_string(m)}});
+        player.set_fit_mode(m);
+        show_osd(7, (double)m);
+        render.set_fit_mode(m);
+        FR_LOG_INFO("[APP] 画面填充模式 = {}（已落盘）",
+                    m == 0 ? "自动" : m == 1 ? "铺满" : m == 2 ? "完整画面" : "拉伸");
+        break;
+      }
       case UiIntent::Kind::ToggleHelp:
         // v0.6.1 d350：F1 帮助面板（F1/点击面板 → 统一经此切换，主线程持镜像）
         help_open = !help_open;
@@ -1555,8 +1682,8 @@ int main(int argc, char** argv) {
         }
         break;
       case UiIntent::Kind::LanguageChanged:
-        // v0.6.2 d362：右键语言子菜单入口 —— 与托盘勾选共用 apply_language
-        //（设语言 + 落盘 + 托盘 tooltip + set_language 回推全帧重绘）。
+        // d362 引入；d421 起无生产者（右键语言子菜单已撤）——分支保留作废条目，
+        // 行为与托盘勾选一致（apply_language 幂等），误投也无副作用。
         apply_language(it.value < 0.5 ? i18n::Lang::ZhCn : i18n::Lang::EnUs);
         break;
     }
@@ -1582,6 +1709,9 @@ int main(int argc, char** argv) {
         const MonitorInfo* tgt = pick_target(cfg, ms, n, -1);
         if (tgt) {
           if (window.fullscreen()) window.toggle_fullscreen();
+          // d441：最大化态迁移必须还原，否则 apply_placement 改矩形时窗口仍带
+          // maximized 标记（Win32 会把新尺寸当临时值，用户再点还原就跳回旧屏）。
+          if (window.maximized()) window.toggle_maximized();
           apply_placement(window, *tgt, mem_for(cfg, tgt->fp));
           FR_LOG_INFO("[APP] 所在屏不可用（关屏/拔出）→ 迁移到屏 {}（{}×{}）", tgt->idx, tgt->w,
                       tgt->h);
@@ -1626,18 +1756,6 @@ int main(int argc, char** argv) {
                                  : std::string(tr(i18n::StrId::TrayShow));
                 items.push_back(show);
                 items.push_back(TrayMenuItem::Sep());
-                PlaybackSnapshot s = bus.snapshot();
-                TrayMenuItem pp;
-                pp.id = 2;
-                pp.label = s.state == TransportState::Playing
-                               ? std::string(tr(i18n::StrId::TrayPause))
-                               : std::string(tr(i18n::StrId::TrayPlay));
-                pp.enabled = !s.uri.empty();
-                items.push_back(pp);
-                TrayMenuItem nx;
-                nx.id = 3;
-                nx.label = tr(i18n::StrId::TrayNext);
-                items.push_back(nx);
                 // v0.6.1 d342：窗口置顶勾选项（与右键菜单同真值 always_on_top）
                 {
                   TrayMenuItem top;
@@ -1645,6 +1763,13 @@ int main(int argc, char** argv) {
                   top.label = tr(i18n::StrId::TrayAlwaysTop);
                   top.checked = always_on_top;
                   items.push_back(top);
+                }
+                {  // d437：开机启动勾选（真值 = 系统启动项本身，不落 settings.json）
+                  TrayMenuItem boot;
+                  boot.id = 5;
+                  boot.label = tr(i18n::StrId::TrayStartOnBoot);
+                  boot.checked = autostart::enabled();
+                  items.push_back(boot);
                 }
                 items.push_back(TrayMenuItem::Sep());
                 {  // d146 R4：投屏窗口 —— 每块可用屏一项（选屏判断失手时的人工兜底硬保障）
@@ -1699,15 +1824,21 @@ int main(int argc, char** argv) {
                   case 1:
                     tray_toggle_window();
                     break;
-                  case 2:
-                    play_pause();
-                    break;
-                  case 3:
-                    exec_intent({UiIntent::Kind::Next});
-                    break;
                   case 4:  // v0.6.1 d342：托盘切换窗口置顶（toggle_always_on_top 内含落盘+OSD）
                     toggle_always_on_top();
                     break;
+                  case 5: {  // d437：开机启动（真值 = 系统启动项；写入失败不弹「开」）
+                    const bool want = !autostart::enabled();
+                    if (autostart::set_enabled(want) && autostart::enabled() == want) {
+                      show_osd(3, want ? 20 : 21);
+                      FR_LOG_INFO("[APP] 开机启动 = {}（系统启动项已{}）", want ? "开" : "关",
+                                  want ? "写入" : "移除");
+                    } else {
+                      FR_LOG_WARN("[APP] 开机启动 = {} 设置失败（系统启动项不可写）",
+                                  want ? "开" : "关");
+                    }
+                    break;
+                  }
                   case 20:  // v0.6.2 d362：托盘语言勾选（apply_language 内含落盘+tooltip+重绘）
                     apply_language(i18n::Lang::ZhCn);
                     break;
@@ -1863,6 +1994,9 @@ int main(int argc, char** argv) {
     for (auto& c : bus.drain_commands()) {
       player.on_command(c);
     }
+    // ★d432：挂起解码档已随本次 SetUri 的 loadfile 生效 → 补一次「已生效」OSD。
+    if (const int m = player.take_hwdec_applied_notice(); m >= 0)
+      show_osd(3, decode_osd_id(m));
     // 2) 状态机泵（mpv 事件 → 转移 + 快照发布）
     // ★d281：先把「舞台宽高比」交给播放器（镜像自适应填充判据）。舞台 = 窗口逻辑尺寸
     //   − 顶栏（顶栏只在非全屏时占位，与 render_loop.cpp 的 stage_top 同一规则）。
@@ -1958,6 +2092,7 @@ int main(int argc, char** argv) {
           (video_zoom_pct != 100 || video_pan_x != 0.0 || video_pan_y != 0.0)) {
         video_zoom_pct = 100;
         video_pan_x = video_pan_y = 0.0;
+        render.set_video_zoom_pct(100);  // 右键菜单勾选镜像同步（否则残留旧档勾选）
         FR_LOG_INFO("[APP] 会话变化 → 画面缩放重置 100%");
       }
       prev_session = snap.has_session;
@@ -1994,7 +2129,9 @@ int main(int argc, char** argv) {
 
     // 7.5) d146 P5：几何变化检测 + 去抖落盘（画中画小窗不记，避免污染按屏记忆；
     //      变化帧只刷新基准与结算时刻，静止 800ms 后的下一轮才真正写盘）
-    if (!pip_mode) {
+    // d439：全屏/最大化也不落盘 —— pos_size 给的是系统最大化矩形（非用户还原矩形），
+    // 写进按屏记忆会把下次启动的普通窗口撑满屏幕。退出后恢复正常跟踪。
+    if (!pip_mode && !window.fullscreen() && !window.maximized()) {
       int wx, wy, ww, wh;
       window.pos_size(&wx, &wy, &ww, &wh);
       const bool fs = window.fullscreen(), mx = window.maximized();
@@ -2071,7 +2208,9 @@ int main(int argc, char** argv) {
   tray::remove();        // d81：撤托盘图标（真退出的唯一路径已到，隐托盘态同达此处）
   url_probe.shutdown();  // d74：探测 worker + mpv 句柄（在 player.shutdown 前后皆可，无共享状态）
   // d146 P5：退出兜底 —— 几何再落盘一次（去抖可能还没到点）
-  if (geo_valid && window.monitor_index_of_window() >= 0)
+  // d439：画中画 / 全屏 / 最大化态下当前矩形不是用户认可的普通窗口矩形，不落盘。
+  if (geo_valid && !pip_mode && !window.fullscreen() && !window.maximized() &&
+      window.monitor_index_of_window() >= 0)
     save_window_geometry(cfg, window, paths::config_file());
   // d163：音量/静音兜底再落盘一次（去抖可能还没到点）
   if (vol_dirty) {

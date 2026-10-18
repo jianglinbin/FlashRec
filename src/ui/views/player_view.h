@@ -48,6 +48,9 @@ struct ViewInput {
   double clip_at = 0;            // 出现时刻（与 now 同源 mono 秒；停留/淡出窗口计算）
   // 窗口模式的圆角半径（全屏/最大化时由调用方置 0 → 直角；窗口模式取 skin.shape）
   float win_radius = 0.f;
+  // d438：右键菜单弹出可用区（客户区 UI 逻辑坐标）。主线程在右键按下时按
+  // 「窗口 ∩ 锚点所在显示器工作区」算好；r <= l 或 b <= t = 无效（渲染侧退整窗）。
+  float popup_l = 0, popup_t = 0, popup_r = 0, popup_b = 0;
   // 按钮 hover/press 动画状态（两态共用同一实例；id 见 ui/views/chrome.h BtnId）
   ButtonFx btns;
   // OSD 反馈（d28；主线程写，随 publish 广播；渲染线程零跨帧状态 ——

@@ -21,6 +21,15 @@ double mono_now() {
   using namespace std::chrono;
   return duration_cast<duration<double>>(steady_clock::now().time_since_epoch()).count();
 }
+
+const char* hwdec_mode_name(int mode) {
+  switch (mode) {
+    case 0: return "软解(no)";
+    case 2: return "NVDEC(nvdec-copy)";
+    case 3: return "DXVA2(dxva2-copy)";
+    default: return "自动(auto-safe)";
+  }
+}
 }  // namespace
 
 PlayerController::PlayerController(EventBus& bus, const Config& cfg) : bus_(bus), cfg_(cfg) {}
@@ -217,7 +226,9 @@ void PlayerController::tick(double now) {
     clear_session("retention-expired");
   }
 
-  // ★d281：镜像自适应填充（只对回环镜像流；0.5s 轮询视频比例）。实测背景：
+  // ★d281/d425：镜像自适应填充 —— 现为 FitMode::Auto 在**回环镜像流**下的内部判据
+  // （Auto + 非镜像会话恒 contain，会话初值见 handle_set_uri；其余模式 tick 不介入）。
+  // 实测背景：
   //   iPhone 横屏镜像 = 1920x884（19.5:9），舞台 = 1920x1146（1.675）。
   //   contain ⇒ 按宽填满 + 上下 131px letterbox（用皮肤底色画）；而源视频左右
   //   还自带手机播放器烧录的纯黑边（截图实测 RGB(0,0,0)，左右各 175px）
@@ -226,7 +237,8 @@ void PlayerController::tick(double now) {
   //   竖屏镜像（498x1080 = 0.461）反过来：contain 恰好上下满、整屏不丢；cover 会把
   //   手机屏幕裁掉大半 —— 所以判决取"谁宽听谁"，不是无脑 cover。
   // 只在**判决变化**时下发 panscan，避免反复 reconfigure 抖动。
-  if (fit_auto_ && stage_aspect_ > 0.01 && now >= fit_probe_next_) {
+  if (fit_mode_ == (int)FitMode::Auto && fit_auto_ && stage_aspect_ > 0.01 &&
+      now >= fit_probe_next_) {
     fit_probe_next_ = now + 0.5;
     const double va = mpv_->video_aspect();
     if (va > 0.0) {
@@ -312,27 +324,78 @@ void PlayerController::set_video_pan(double x, double y) {
   if (mpv_) mpv_->set_video_pan(x, y);
 }
 
-// v0.6.1 d353：解码方式选择转发（mpv API 收口规则）。
-void PlayerController::set_hwdec_mode(int mode) {
-  if (mpv_) mpv_->set_hwdec_mode(mode);
+// v0.6.1 d353：解码方式选择（mpv API 收口规则）。
+// ★d432：AirPlay 会话一律挂起到下次会话 —— 镜像 H.264 每会话仅开头 1 个 IDR，
+//   d428~d431 已证明任何重载后的新解码器都只能从 P 帧接入，wait_idr 永不释放，
+//   画面永久冻结。此处连 hwdec 属性都不写，彻底不碰活动解码链。
+bool PlayerController::set_hwdec_mode(int mode) {
+  if (mode < 0 || mode > 3) return true;
+  if (!mpv_) return true;
+
+  if (snap_.has_session && snap_.source == CastSource::AirPlay) {
+    if (mode == active_hwdec_mode_.load(std::memory_order_relaxed)) {
+      pending_hwdec_mode_.store(-1, std::memory_order_relaxed);  // 点当前档 = 取消挂起
+      FR_LOG_INFO("[DMR] AirPlay 会话中选当前解码档 {}，无需挂起", hwdec_mode_name(mode));
+      return true;
+    }
+    pending_hwdec_mode_.store(mode, std::memory_order_release);
+    FR_LOG_WARN("[DMR] AirPlay 会话中：解码方式 → {} 挂起，下次会话生效（本次不重载）",
+                hwdec_mode_name(mode));
+    return false;
+  }
+
+  pending_hwdec_mode_.store(-1, std::memory_order_release);
+  if (snap_.has_session) {
+    mpv_->set_hwdec_mode(mode);   // DLNA/点播：立即生效（属性 + 按位重载）
+  } else {
+    mpv_->apply_hwdec_mode(mode);  // 无会话：只落属性，不重载残留 URI
+  }
+  active_hwdec_mode_.store(mode, std::memory_order_release);
+  return true;
+}
+
+int PlayerController::active_hwdec_mode() const {
+  return active_hwdec_mode_.load(std::memory_order_relaxed);
+}
+
+int PlayerController::pending_hwdec_mode() const {
+  return pending_hwdec_mode_.load(std::memory_order_relaxed);
+}
+
+int PlayerController::take_hwdec_applied_notice() {
+  return hwdec_applied_notice_.exchange(-1, std::memory_order_acq_rel);
 }
 
 void PlayerController::set_panscan(double p) {
   if (mpv_) mpv_->set_panscan(p);
 }
 
-// ★d295：切皮肤后恢复自适应填充的判决。
-//   病灶：`main.cpp` 切皮肤时无条件 `set_panscan(皮肤 stageCover)`，把 d281 已下发的
-//   「按比例自适应」判决覆盖掉。真机实测（16:24:03切 ubuntu-orange）：
-//     panscan 1 → 0，render 日志由 `(75,0) 1770x884 -> (0,0) 960x480`
-//     （裁两侧、上下铺满）退回 `(0,0) 1920x884 -> (0,19) 960x442`（留边、上下黑边）。
-//   ⇒ 自适应期间（fit_auto_）**不动 panscan**；把 fit_applied_ 复位让下一轮 tick 重判即可
-//   （tick 每 0.5s 重判一次，舞台比例在切皮肤后可能也变了）。
-void PlayerController::restore_fit_after_skin_change() {
-  if (!fit_auto_) return;  // 非镜像自适应会话：panscan 归皮肤管，main.cpp照旧下发
-  fit_applied_ = -1.0;    // 复位 → 下一轮 tick 用新皮肤下的舞台比例重判
-  fit_probe_next_ = 0.0;
-  FR_LOG_INFO("[MPV] 切皮肤：自适应填充生效中，保留 panscan（下一轮重判）");
+// ★d425：画面填充模式（FIT_MODE_PLAN.md）。持久偏好：落盘与重启恢复在 main 侧，
+// 这里只管「立即应用到 mpv」——属性跨 loadfile 持久，随时可改；新会话由
+// handle_set_uri 按模式重下初值。
+//   Cover/Contain：keepaspect=yes + panscan 1/0。
+//   Stretch：keepaspect=no + panscan=0（变形填充本体在 mpv keepaspect）。
+//   Auto：keepaspect=yes，先按 contain 落底；镜像会话复位判决态让下一轮 tick
+//   （≤0.5s）按「视频比例 vs 舞台比例」重判，非镜像会话 tick 不轮询（恒 contain）。
+void PlayerController::set_fit_mode(int mode) {
+  if (mode < (int)FitMode::Auto || mode > (int)FitMode::Stretch) return;
+  fit_mode_ = mode;
+  if (!mpv_) return;
+  if (mode == (int)FitMode::Stretch) {
+    mpv_->set_keep_aspect(false);
+    mpv_->set_panscan(0.0);
+  } else {
+    mpv_->set_keep_aspect(true);
+    mpv_->set_panscan(mode == (int)FitMode::Cover ? 1.0 : 0.0);
+    if (mode == (int)FitMode::Auto) {
+      fit_applied_ = -1.0;  // 复位 → 下一轮 tick 重判（仅镜像会话轮询）
+      fit_probe_next_ = 0.0;
+    }
+  }
+  FR_LOG_INFO("[MPV] 画面填充模式 → {}", mode == 0   ? "自动"
+                                        : mode == 1 ? "铺满"
+                                        : mode == 2 ? "完整画面"
+                                                    : "拉伸");
 }
 
 void PlayerController::set_background_color(const std::string& rgb_hex) {
@@ -471,6 +534,42 @@ void PlayerController::handle_set_uri(const DmrCommand& c, double now) {
       FR_LOG_WARN("[MPV] FR_LIVE_FORMAT={} → 回环 URI 按实时流加载（取证台）", live_fmt);
     }
   }
+  // ★d425：画面填充模式会话初值（FIT_MODE_PLAN §二/§三.5）。必须在 load_uri 之前
+  //   下发 —— load_uri 从桥层成员重申 panscan/keepaspect（跨 loadfile 持久属性，
+  //   防上会话残留），set_panscan/set_keep_aspect 会同步成员，重申即取到本值。
+  //   Auto 先按 contain 起步：镜像流由 tick 在首个轮询周期内按比例重判（横屏镜像
+  //   通常立即跳 cover，d281 同款）；非镜像会话（DLNA 直链/HLS 直载）tick 不轮询，
+  //   恒 contain —— 电影 2.39:1 不被默认裁切。
+  switch ((FitMode)fit_mode_) {
+    case FitMode::Cover:
+      mpv_->set_keep_aspect(true);
+      mpv_->set_panscan(1.0);
+      break;
+    case FitMode::Stretch:
+      mpv_->set_keep_aspect(false);
+      mpv_->set_panscan(0.0);
+      break;
+    case FitMode::Contain:
+    case FitMode::Auto:
+    default:
+      mpv_->set_keep_aspect(true);
+      mpv_->set_panscan(0.0);
+      break;
+  }
+  // ★d432：上一次 AirPlay 会话挂起的解码档，在本会话 loadfile **之前**落属性。
+  //   此处不重载（新会话本来就要 loadfile，属性随新解码器初始化生效）。
+  {
+    const int pm = pending_hwdec_mode_.exchange(-1, std::memory_order_acq_rel);
+    if (pm >= 0) {
+      const int prev = active_hwdec_mode_.exchange(pm, std::memory_order_acq_rel);
+      if (pm != prev) {
+        mpv_->apply_hwdec_mode(pm);
+        hwdec_applied_notice_.store(pm, std::memory_order_release);
+        FR_LOG_INFO("[DMR] [req#{}] 应用挂起解码方式 {}（随本次 loadfile 生效）", c.req_id,
+                    hwdec_mode_name(pm));
+      }
+    }
+  }
   mpv_->load_uri(c.uri, -1.0, live_fmt);
   live_format_ = live_fmt;  // ★d312：暂存回环加载格式，暂停恢复跳前沿时复用
   // ★d322：新会话恢复**用户倍速**（d169 档位）——AirPlay 追赶控制器可能把 mpv
@@ -492,14 +591,17 @@ void PlayerController::handle_set_uri(const DmrCommand& c, double now) {
     live_loaded_wall_ = -1.0;
     live_firstpos_wall_ = -1.0;
   }
-  // ★d281：填充策略分流。回环 URI（tcp://127.0.0.1:）= AirPlay 镜像/音频回流 →
-  //   走「按比例自适应」（判据见 tick）：这类流的形状 = **手机屏幕形状**，源内还可能
-  //   自带播放器烧录的黑边，不能只按皮肤 fit 死办。DLNA 直链与 AirPlay 的 HLS 直载
-  //   （location 直给 mpv）仍按皮肤 fit —— 电影 2.39:1 被 cover 会裁掉约三成画面。
-  //   前缀常量与 mpv_bridge（回流 URI 不进 last_uri_）同源，见 cast_contract.h。
+  // ★d281/d425：填充策略分流。回环 URI（tcp://127.0.0.1:）= AirPlay 镜像/音频回流 →
+  //   FitMode::Auto 下走「按比例自适应」（判据见 tick）：这类流的形状 = **手机屏幕形状**，
+  //   源内还可能自带播放器烧录的黑边，不能只死办 contain。DLNA 直链与 AirPlay 的 HLS
+  //   直载（location 直给 mpv）在 Auto 下恒 contain —— 电影 2.39:1 被 cover 会裁掉约
+  //   三成画面；用户可经右键「画面填充」显式选铺满/拉伸。前缀常量与 mpv_bridge
+  //   （回流 URI 不进 last_uri_）同源，见 cast_contract.h。
   fit_auto_ = base.rfind(cast::kLoopbackUriPrefix, 0) == 0;
-  fit_applied_ = -1.0;   // 本会话尚未判定 → 下一轮 tick 首次取样
-  fit_probe_next_ = 0.0;
+  if (fit_mode_ == (int)FitMode::Auto) {
+    fit_applied_ = -1.0;   // 本会话尚未判定 → 下一轮 tick 首次取样
+    fit_probe_next_ = 0.0;
+  }
   FR_LOG_INFO("[DMR] [req#{}] SetURI {} title=\"{}\"", c.req_id, uri_without_fragment(c.uri),
               snap_.title);
   // ★d143：DIDL 原文落盘（受 log.trace_http_body 控制）。起始进度的候选载体之一就藏在

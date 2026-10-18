@@ -27,6 +27,7 @@
 #include "ui/framebuffer.h"
 #include "ui/nanovg_gl_impl.h"
 #include "ui/regions.h"  // d59：UiRegions（归因差集基准）
+#include "ui/views/chrome.h"  // d438：CtxAction（子菜单父条目身份）
 
 struct NVGcontext;
 
@@ -120,28 +121,47 @@ class RenderLoop {
   void set_show_info(bool on) { show_info_ = on; }
   // d146 R2：投屏自动全屏勾选初值（主线程启动设一次；之后勾选切换在渲染线程
   // 本地置位并回投 UiPrefChanged，主线程落盘 + 管线读取走 cfg）
-  void set_cast_auto_fullscreen(bool on) { cast_auto_fs_ = on; }
-  bool cast_auto_fs_ = false;  // 右键菜单「投屏自动全屏」勾选态（渲染线程自有）
+  // d440：主线程 setter 与渲染线程菜单翻转双写 → 原子量（此前是裸 bool 数据竞争）。
+  void set_cast_auto_fullscreen(bool on) { cast_auto_fs_.store(on, std::memory_order_release); }
+  std::atomic<bool> cast_auto_fs_{false};  // 右键菜单「投屏自动全屏」勾选态
   // v0.6.1 d342：窗口置顶勾选态（右键菜单）。同 cast_auto_fs_ 模式：主线程启动设
   // 初值；渲染线程勾选即本地翻转 + 回投 UiPrefChanged，主线程执行 set_floating、
   // 落盘并经本 setter 回推真值（托盘/快捷键入口不经渲染线程翻转，只回推）。
   void set_always_on_top(bool on) {
-    always_on_top_ = on;
+    always_on_top_.store(on, std::memory_order_release);
     force_dirty_.store(true, std::memory_order_release);
   }
-  bool always_on_top_ = false;  // 右键菜单「窗口置顶」勾选态（渲染线程自有镜像）
+  std::atomic<bool> always_on_top_{false};  // 右键菜单「窗口置顶」勾选态
   // v0.6.1 d346：窗口缩放档位镜像（右键菜单四档勾选）。主线程 set_zoom 时回推；
   // 步进（Ctrl+↑↓/滚轮）与数字键同样经它同步。初值 100 = 默认档（用户体感定值）。
   // v0.6.1 d350：Ctrl 分流改「画面缩放」（video-zoom），窗口档位仅数字键/菜单。
+  // d440：镜像原子化（主线程写 / 渲染线程读）。
   void set_zoom(int pct) {
-    zoom_pct_ = pct;
+    zoom_pct_.store(pct, std::memory_order_release);
     force_dirty_.store(true, std::memory_order_release);
   }
-  int zoom_pct_ = 100;
+  std::atomic<int> zoom_pct_{100};
+  // 右键菜单「画面缩放」档位镜像（勾选态）。画面缩放真值 = 主线程 video_zoom_pct
+  //（Ctrl+↑↓/滚轮/中键、菜单、会话边沿重置全部经 set_video_zoom 回推到这里）。
+  void set_video_zoom_pct(int pct) {
+    vzoom_pct_.store(pct, std::memory_order_release);
+    force_dirty_.store(true, std::memory_order_release);
+  }
+  std::atomic<int> vzoom_pct_{100};
+  // d426：右键菜单「画面填充」档位镜像（勾选态）。真值 = settings.json
+  // player.fit_mode（主线程 cfg 持有，持久偏好）：菜单点选时渲染线程本地翻转
+  //（本帧反馈）+ 回投 FitMode 意图，主线程执行后经 set_fit_mode 回推对齐（幂等）；
+  // 启动恢复由主线程设一次初值。d440：双写镜像原子化。
+  void set_fit_mode(int m) {
+    fit_mode_.store(m, std::memory_order_release);
+    force_dirty_.store(true, std::memory_order_release);
+  }
+  std::atomic<int> fit_mode_{0};  // 0 自动 / 1 铺满 / 2 完整画面 / 3 拉伸（player FitMode 同表）
   // v0.6.1 d350：Ctrl+左键拖拽 = 画面平移进行中（主线程手势状态广播）。
   // 渲染线程据此冻结舞台三态机/单击消歧（拖拽期间点击不得误判成播放/暂停）。
+  // d440：主线程写 / 渲染线程读 → 原子量。
   void set_pan_drag(bool on) {
-    pan_drag_ = on;
+    pan_drag_.store(on, std::memory_order_release);
     force_dirty_.store(true, std::memory_order_release);
   }
   // v0.6.2 d362：语言热切换回推（语言真值 = i18n 模块原子量，主线程 set_lang 后
@@ -153,30 +173,32 @@ class RenderLoop {
   // v0.6.1 d350：F1 帮助面板（全部快捷键一览）。开时全屏遮罩 + 居中卡片，
   // 点击面板/F1/ESC 关闭（点击经 ToggleHelp 意图回主线程统一翻转镜像）。
   // 与右键菜单/倍速/皮肤弹层互斥（开帮助连带关闭）。
+  // d440：渲染线程是 help_open_ 的唯一持有者 —— 主线程只登记待处理开关，
+  // 帧首消费（原实现主线程直写渲染线程独占状态；且 PIP 自动关闭不回投主线程）。
   void set_help(bool on) {
-    help_open_ = on;
-    if (on) {
-      ctx_open_ = false;
-      close_ctx_sub();
-      speed_open_ = false;
-      skin_open_ = false;
-    }
+    help_pending_.store(on ? 1 : 0, std::memory_order_release);
     force_dirty_.store(true, std::memory_order_release);
+    wake();
   }
-  bool pan_drag_ = false;
-  bool help_open_ = false;
+  std::atomic<bool> pan_drag_{false};
+  bool help_open_ = false;   // 仅渲染线程访问（帧首消费 help_pending_）
   bool help_lprev_ = false;  // d350：帮助面板点击关闭用（弹起边沿检测）
   // v0.6.1 d353：解码方式镜像（右键「解码」子菜单勾选）。0 软解 / 1 自动
-  //（auto-safe，默认）/ 2 NVDEC / 3 DXVA2。点选本地翻转（本帧反馈）+ 回投
-  // DecodeMode 意图，2Hz 轮询 hwdec-current 到手后校正（"no"→0；非 "no" 无法
-  // 区分具体硬解后端，维持现值）。
+  //（auto-safe，默认）/ 2 NVDEC / 3 DXVA2。
+  // ★d432：勾选真值改为每帧从播放器回读（active_hwdec_mode）；AirPlay 会话中
+  // 点选不本地翻转，另记 pending_hwdec_ 并在菜单项后标「下次生效」。
+  // 实测 hwdec-current == "no" 时勾选回落到软解（硬解不可用的真值）。
   int hwdec_mode_ = 1;
-  // v0.6.1 d347：右键二级子菜单状态（当前仅「窗口大小」一个父条目；子条目表
-  // 每帧在出帧路径重建——主菜单条目表本身是条件增减的，父条目下标每帧重扫）。
+  int pending_hwdec_ = -1;  // ★d432：挂起到下次会话的档（-1 = 无）
+  // ★d432：CtxMenuItem.label 是 const char*，合成「（下次生效）」需要稳定缓冲。
+  std::string ctx_decode_parent_label_;
+  std::string ctx_decode_item_label_;
+  // v0.6.1 d347：右键二级子菜单状态（子条目表每帧在出帧路径重建——主菜单
+  // 条目表本身是条件增减的，父条目下标每帧重扫）。
   bool ctx_sub_open_ = false;   // 子菜单展开中（父条目 hover 展开 / 点外或 ESC 收起）
-  // v0.6.1 d353：第二个父条目「解码」加入 → 记录展开的是哪个父条目
-  //（0=窗口大小 1=解码；父条目扫描/子条目构造/交互块据此分派）。
-  int ctx_sub_kind_ = 0;
+  // d438：展开的父条目身份（替代 d353 的 ctx_sub_kind_ 编号）——父条目被条件
+  // 增减时按 action 重扫下标，编号漂移/语义复用问题根除。
+  CtxAction ctx_sub_parent_ = CtxAction::None;
   int ctx_sub_hover_ = -1;
   int ctx_sub_press_ = -1;      // 按下锁定的子条目（弹起同条目才激活，标准菜单语义）
   bool ctx_sub_lprev_ = false;
@@ -184,6 +206,9 @@ class RenderLoop {
   void close_ctx_sub() {
     if (ctx_sub_open_) {
       ctx_sub_open_ = false;
+      ctx_sub_parent_ = CtxAction::None;
+      ctx_sub_hover_ = -1;
+      ctx_sub_press_ = -1;
       force_dirty_.store(true, std::memory_order_release);
     }
   }
@@ -193,6 +218,16 @@ class RenderLoop {
   //（不被主循环踢醒），不 post 的话关菜单要等它下一次超时醒来才生效。
   void request_menu_dismiss() {
     menu_dismiss_.store(true, std::memory_order_release);
+    wake();
+  }
+  // d440：窗口失焦复位。焦点被系统/别的窗口抓走后 GLFW 不再送按键抬起，
+  // 主线程的 in.down / 渲染线程的边沿基准会卡在「按下」——下次进窗时快照
+  // 变为 false，就会伪造一次弹起点击（可能误触播放/关窗）。主线程先调本方法
+  // 登记请求，再复位自身输入并发布；请求先于新快照可见，渲染线程帧首最早在
+  // 同一帧内清空指针状态，之后看到抬起不会合成点击。
+  void request_input_reset() {
+    input_reset_.store(true, std::memory_order_release);
+    force_dirty_.store(true, std::memory_order_release);
     wake();
   }
 
@@ -302,6 +337,8 @@ class RenderLoop {
   double media_at_ = 0;              // 媒体数据 2Hz 轮询时刻
   BadgeMedia media_{};               // 2Hz 轮询缓存（绘制与量化共用同一份）
   std::atomic<bool> menu_dismiss_{false};  // 主线程 ESC 请求（见 request_menu_dismiss）
+  std::atomic<int> help_pending_{-1};      // d440：主线程帮助开关（-1 无 / 0 关 / 1 开）
+  std::atomic<bool> input_reset_{false};   // d440：主线程焦点丢失复位请求
 
   // —— d43 按需渲染（脏帧）基准 ——
   // 静默期（无输入/无快照变化/无活动动画）不出帧不 swap：GL 零工作，已呈现画面

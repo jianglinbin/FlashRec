@@ -1,6 +1,7 @@
 #pragma once
 // 播放状态机：全项目唯一真值（DMR_SOAP_SPEC §2 六不变量 + AGENTS.md 规则 3）。
 // 快照 PlaybackSnapshot 经事件总线对外发布；UI 与 SOAP 层只读，禁止第二份副本。
+#include <atomic>
 #include <deque>
 #include <memory>
 #include <string>
@@ -11,6 +12,14 @@
 namespace fr {
 
 struct Config;
+
+// ★d425：画面填充模式（FIT_MODE_PLAN.md）——用户在右键「画面填充」子菜单选择的
+// 持久偏好（settings.json player.fit_mode），与协议、皮肤无关：
+//   Auto    自动（默认）：回环镜像流 = d281 自适应（谁宽听谁）；其余会话 = contain
+//   Cover   铺满：panscan=1，放大裁边消灭黑边（接受裁切）
+//   Contain 完整画面：panscan=0，留边（底色随皮肤 stageBg，d196 机制不变）
+//   Stretch 拉伸：keepaspect=no + panscan=0，无视比例变形铺满
+enum class FitMode : int { Auto = 0, Cover = 1, Contain = 2, Stretch = 3 };
 
 class PlayerController {
  public:
@@ -58,20 +67,25 @@ class PlayerController {
   void set_video_zoom(double z);
   void set_video_pan(double x, double y);
   // v0.6.1 d353：解码方式选择（右键「解码」子菜单）。0 软解 / 1 自动 / 2 NVDEC /
-  // 3 DXVA2。内部按位重载续播（对已加载流确定生效），重载重置的渲染属性由 main 重放。
-  void set_hwdec_mode(int mode);
-  // d184：视频填充（cover=1 / contain=0）
+  // 3 DXVA2。非 AirPlay 会话内部按位重载续播（对已加载流确定生效），重载重置的
+  // 渲染属性由 main 重放。
+  // ★d432：AirPlay 镜像会话（单 IDR，重载必冻结）只记录挂起档，不写 mpv 属性、
+  // 不重载，等下一次 SetUri 的 load_uri 之前生效。返回 true = 已立即生效，
+  // false = 已挂起到下次会话。
+  bool set_hwdec_mode(int mode);
+  // ★d432：解码档位真值（渲染线程 2Hz 轮询用）。active = 最近一次实际下发档，
+  // pending = 挂起到下次会话的档（-1 = 无）。均为原子读，跨线程安全。
+  int active_hwdec_mode() const;
+  int pending_hwdec_mode() const;
+  // 一次性「挂起档已在新会话生效」通知（主线程消费；无通知返回 -1）。
+  int take_hwdec_applied_notice();
+  // d184：视频填充（cover=1 / contain=0）。d425 起仅供 FitMode 映射内部使用，
+  // 皮肤/协议面不再直接下发（FIT_MODE_PLAN.md §三.7）。
   void set_panscan(double p);
-  // ★d295：当前是否处于「镜像自适应填充」模式（回环镜像流 = d281 的按比例自适应）。
-  //   切皮肤时需要它做闸门 —— 见 main.cpp 的切皮肤逻辑。
-  bool fit_auto_active() const { return fit_auto_; }
-  // ★d295：切皮肤后把 panscan 交还给自适应判决。
-  //   病灶：切皮肤会无条件 set_panscan(皮肤 fit) ⇒ 把 d281 已下发的自适应判决**覆盖掉**。
-  //   实测（16:24:03）：panscan 由 1 变0，render 日志从
-  //   `(75,0) 1770x884 -> (0,0) 960x480`（裁两侧、上下铺满）
-  //   退回 `(0,0) 1920x884 -> (0,19) 960x442`（留边、上下黑边）。
-  //   ⇒ 自适应期间切皮肤**不应**动 panscan；非自适应期间才听皮肤的。
-  void restore_fit_after_skin_change();
+  // ★d425：画面填充模式（右键「画面填充」子菜单 / settings.json player.fit_mode）。
+  // 持久偏好，不随会话重置：这里只管立即应用到 mpv；新会话由 handle_set_uri 按模式
+  // 下初值。Auto 会复位自适应判决态，让下一轮 tick（≤0.5s）按比例重判。
+  void set_fit_mode(int mode);
   // d196：留边底色（letterbox）= 皮肤 stageBg，避免 contain 恒黑边
   void set_background_color(const std::string& rgb_hex);
   // ★d281：镜像自适应填充 —— 主循环每轮把**舞台宽高比**（逻辑坐标，顶栏可见时不计入）
@@ -147,11 +161,13 @@ class PlayerController {
   double live_loaded_wall_ = -1.0;      // 本次 loadfile 的 file-loaded 墙钟（-1=未到）
   double live_firstpos_wall_ = -1.0;    // 首个有效 time-pos 的墙钟（-1=未到）
   // ★d281：镜像自适应填充状态（全在主线程 tick 内读写，无并发）。
-  //   fit_auto_       = 本次加载是不是回环镜像流（唯一开关，DLNA 恒 false）
+  //   fit_auto_       = 本次加载是不是回环镜像流（仅 FitMode::Auto 消费，DLNA 恒 false）
+  //   fit_mode_       = ★d425：当前填充模式（FitMode 的 int 值；真值 = cfg.player_fit_mode）
   //   stage_aspect_   = 舞台宽高比（主循环推送；窗口缩放/全屏切换即时更新）
   //   fit_applied_    = 已下发的 panscan（-1 = 本会话尚未判定）
   //   fit_probe_next_ = 比例轮询限频（0.5s；流中途换比例/手机旋转也能跟上）
   bool fit_auto_ = false;
+  int fit_mode_ = 0;  // ★d425：FitMode::Auto
   // ★d299：探针断流检测（apts 连续不动的采样计数 + 上次 apts）。
   //   用于在客户端断开后停打「接收端积压」—— 它会随墙钟线性增长，是记账假象。
   // ★d302：数据侧延迟的滑动峰值（demuxer 已读位置 − time-pos）。
@@ -172,6 +188,12 @@ class PlayerController {
   double reconnect_at_ = 0.0;        // 指数退避重连时刻（R6）
   double last_reconnect_delay_ = 1.0;  // 上次退避时长（日志用）
   std::string reconnect_uri_;
+  // ★d432：AirPlay 会话中的解码切换只能下次会话生效 —— 镜像 H.264 每会话仅
+  //   开头 1 个 IDR，任何 loadfile 的新解码器都从 P 帧接入，wait_idr 永不释放。
+  //   pending 只在 handle_set_uri 的 load_uri 之前消费，其他重载路径一律不碰。
+  std::atomic<int> pending_hwdec_mode_{-1};
+  std::atomic<int> active_hwdec_mode_{1};  // 与 mpv_bridge::init 的 auto-safe 对齐
+  std::atomic<int> hwdec_applied_notice_{-1};
 };
 
 }  // namespace fr

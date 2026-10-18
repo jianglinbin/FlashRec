@@ -545,8 +545,32 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
         case 11: label = tr(i18n::StrId::OsdDecodeSw); break;     // v0.6.1 d353
         case 12: label = tr(i18n::StrId::OsdDecodeNvdec); break;  // v0.6.1 d353
         case 13: label = tr(i18n::StrId::OsdDecodeDxva2); break;  // v0.6.1 d353
+        // ★d432：AirPlay 会话中挂起（id16–19 = 自动/软解/NVDEC/DXVA2）。
+        //   文案 = 档位名 + 「（投屏中无法切换，下次生效）」。
+        case 16:
+          text_buf = std::string(tr(i18n::StrId::OsdDecodeAuto)) +
+                     tr(i18n::StrId::OsdDecodePendingSuffix);
+          label = text_buf.c_str();
+          break;
+        case 17:
+          text_buf = std::string(tr(i18n::StrId::OsdDecodeSw)) +
+                     tr(i18n::StrId::OsdDecodePendingSuffix);
+          label = text_buf.c_str();
+          break;
+        case 18:
+          text_buf = std::string(tr(i18n::StrId::OsdDecodeNvdec)) +
+                     tr(i18n::StrId::OsdDecodePendingSuffix);
+          label = text_buf.c_str();
+          break;
+        case 19:
+          text_buf = std::string(tr(i18n::StrId::OsdDecodeDxva2)) +
+                     tr(i18n::StrId::OsdDecodePendingSuffix);
+          label = text_buf.c_str();
+          break;
         case 14: label = tr(i18n::StrId::OsdLangZh); break;  // v0.6.2 d362：语言反馈
         case 15: label = tr(i18n::StrId::OsdLangEn); break;  // v0.6.2 d362
+        case 20: label = tr(i18n::StrId::OsdBootOn); break;   // d437：开机启动反馈
+        case 21: label = tr(i18n::StrId::OsdBootOff); break;  // d437
         default: label = ""; break;
       }
     }
@@ -571,7 +595,8 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
       // 语义由文字标签（"窗口置顶 开/关"）区分。d352：解码切换（10/11）同样无
       // 专用图标，沿此先例复用画中画图标，文字标签区分。
       else if (id == 8 || id == 9) icon_pip(vg, icon_cx, cy, L.osdActIconR * s, t.icon);
-      else if (id >= 10 && id <= 13) icon_pip(vg, icon_cx, cy, L.osdActIconR * s, t.icon);
+      else if ((id >= 10 && id <= 13) || (id >= 16 && id <= 21))  // d432/d437：含挂起与开机启动
+        icon_pip(vg, icon_cx, cy, L.osdActIconR * s, t.icon);
     }
 
     text(vg, t, icon_cx + icon_half + gap, cy, L.osdFont * s, t.subText, label,
@@ -613,6 +638,26 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
     const float ph = L.osdSeekH * s;
     const std::string label =
         tr(i18n::StrId::OsdZoomPrefix) + std::to_string((int)(in.osd_value + 0.5)) + "%";
+    const float tw = text_width(vg, L.osdFont * s, label.c_str());
+    const float pw = tw + L.osdSpeedPad * s;
+    rounded_rect(vg, px, py, pw, ph, L.osdRadius * s, t.barBg);
+    text(vg, t, px + pw * 0.5f, py + ph * 0.5f, L.osdFont * s, t.subText, label.c_str(),
+         NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+  } else if (in.osd_kind == 7) {
+    // —— 画面填充模式反馈（d426）：照 kind5/6 骨架，label = 「画面模式：铺满」——
+    // osd_value = 模式号（0 自动 / 1 铺满 / 2 完整画面 / 3 拉伸，player FitMode 同表）。
+    const float px = L.osdEdgeGap;
+    const float py = L.osdTopGap;
+    const float s = std::min(1.f, h * L.osdMaxHRatio / L.osdSeekH);
+    const float ph = L.osdSeekH * s;
+    const int m = (int)(in.osd_value + 0.5);
+    // tr() 返回 const char*，拼接必须由 std::string 起头（C2110：指针 + 指针非法）。
+    const std::string label =
+        std::string(tr(i18n::StrId::OsdFitPrefix)) +
+        tr(m == 1   ? i18n::StrId::FitModeCover
+           : m == 2 ? i18n::StrId::FitModeContain
+           : m == 3 ? i18n::StrId::FitModeStretch
+                    : i18n::StrId::FitModeAuto);
     const float tw = text_width(vg, L.osdFont * s, label.c_str());
     const float pw = tw + L.osdSpeedPad * s;
     rounded_rect(vg, px, py, pw, ph, L.osdRadius * s, t.barBg);
@@ -700,28 +745,24 @@ void draw_help(NVGcontext* vg, const Theme& t, float win_w, float win_h,
     y += row_h;
   }
 }
-// —— 右键上下文菜单（d45）——
+// —— 右键上下文菜单（d45；d438 重构几何）——
 // 几何常量说明：菜单是临时浮层，尺寸常量取现有 token 就近组合（osdRadius 面板圆角 /
 // badgeRadius 悬停条圆角 / titleFont 条目字号），不为它新增 layout token。
-int CtxMenuLayout::item_at(float px, float py) const {
-  if (px < x || px > x + w || py < y || py > y + h) return -1;
-  for (int i = 0; i < count; i++) {
-    if (sep[i]) continue;
-    if (py >= y + ys[i] && py <= y + ys[i] + item_h) return i;
-  }
-  return -1;
-}
+namespace {
 
-CtxMenuLayout ctx_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float win_h,
-                              const CtxMenuItem* items, int n, float mx, float my) {
+// d438：测量 + ys/sep 填充的唯一实现。容量取 CtxMenuLayout::kMaxItems，
+// 覆盖全部条目 —— 旧实现硬编码 16，与 ys[24] 脱节：满 18 项（有上/下一集）
+// 时高度少算，且 label=nullptr 的分隔线会被当普通条目绘制（空指针崩溃路径）。
+CtxMenuLayout measure_ctx_menu(NVGcontext* vg, const Theme& t, const CtxMenuItem* items,
+                               int n) {
   const auto& L = t.layout;
   CtxMenuLayout lay;
-  lay.count = n;
+  lay.count = std::min(n, CtxMenuLayout::kMaxItems);
   lay.item_h = L.ctxItemH;
   lay.sep_h = L.ctxSepH;
   lay.pad_y = L.ctxPadY;
   float maxw = 0.f, total = lay.pad_y;
-  for (int i = 0; i < n && i < 16; i++) {
+  for (int i = 0; i < lay.count; i++) {
     lay.sep[i] = items[i].label == nullptr;
     lay.ys[i] = total;
     total += lay.sep[i] ? lay.sep_h : lay.item_h;
@@ -729,16 +770,93 @@ CtxMenuLayout ctx_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float
   }
   lay.w = L.ctxPadX + L.ctxCheckW + maxw + L.ctxRightPad;
   lay.h = total + lay.pad_y;
-  // 弹出点：锚点右下偏 ctxAnchorOffset；越界回夹进窗口（四边各留 2px）
-  lay.x = std::min(std::max(2.f, mx + L.ctxAnchorOffset),
-                   std::max(2.f, win_w - lay.w - 2.f));
-  lay.y = std::min(std::max(2.f, my + L.ctxAnchorOffset),
-                   std::max(2.f, win_h - lay.h - 2.f));
   return lay;
 }
 
+// hi < lo（面板比可用区还大）时取 lo：先保证左上角可见，溢出由窗口裁剪兜底。
+float clamp_axis(float v, float lo, float hi) { return std::max(lo, std::min(v, hi)); }
+
+}  // namespace
+
+bool CtxMenuLayout::contains(float px, float py) const {
+  return px >= x && px < x + w && py >= y && py < y + h;
+}
+
+int CtxMenuLayout::item_at(float px, float py) const {
+  if (!contains(px, py)) return -1;
+  for (int i = 0; i < count; i++) {
+    if (sep[i]) continue;
+    if (py >= y + ys[i] && py < y + ys[i] + item_h) return i;
+  }
+  return -1;
+}
+
+CtxMenuLayout ctx_menu_layout(NVGcontext* vg, const Theme& t, const PopupArea& area,
+                              const CtxMenuItem* items, int n, float mx, float my) {
+  CtxMenuLayout lay = measure_ctx_menu(vg, t, items, n);
+  const auto& L = t.layout;
+  // 弹出点：锚点右下偏 ctxAnchorOffset；越界回夹进可用区（保持既有回夹语义）。
+  lay.x = clamp_axis(mx + L.ctxAnchorOffset, area.l, area.r - lay.w);
+  lay.y = clamp_axis(my + L.ctxAnchorOffset, area.t, area.b - lay.h);
+  return lay;
+}
+
+CtxMenuLayout ctx_submenu_layout(NVGcontext* vg, const Theme& t, const PopupArea& area,
+                                 const CtxMenuItem* items, int n,
+                                 const CtxMenuLayout& parent, int parent_idx,
+                                 bool* out_left) {
+  CtxMenuLayout lay = measure_ctx_menu(vg, t, items, n);
+  const auto& L = t.layout;
+  const float gap = L.ctxAnchorOffset;
+  const float right_x = parent.x + parent.w + gap;
+  const float left_x = parent.x - gap - lay.w;
+  bool use_left = false;
+  if (right_x + lay.w <= area.r) {
+    lay.x = right_x;  // 优先父面板右侧
+  } else if (left_x >= area.l) {
+    lay.x = left_x;   // 右侧放不下 → 翻到父面板左侧
+    use_left = true;
+  } else {
+    // 两侧都放不下（超宽菜单/极窄窗口）：选空间大的一侧再回夹，尽量少遮挡父菜单。
+    const float room_r = area.r - right_x;
+    const float room_l = left_x - area.l;
+    use_left = room_l > room_r;
+    lay.x = clamp_axis(use_left ? left_x : right_x, area.l, area.r - lay.w);
+  }
+  if (out_left) *out_left = use_left;
+  // 纵向：面板顶 = 父条目顶边（截图问题的根因：旧实现锚在父条目中心）。
+  const float row_top = (parent_idx >= 0 && parent_idx < parent.count)
+                            ? parent.y + parent.ys[parent_idx]
+                            : parent.y;
+  lay.y = row_top;
+  if (lay.y + lay.h > area.b) lay.y = area.b - lay.h;  // 底部放不下：只上移必要距离
+  lay.y = std::max(lay.y, area.t);                     // 顶部夹住
+  return lay;
+}
+
+bool ctx_submenu_bridge_hit(const CtxMenuLayout& parent, const CtxMenuLayout& sub,
+                            int parent_idx, float px, float py) {
+  if (parent_idx < 0 || parent_idx >= parent.count) return false;
+  float bx0 = 0, bx1 = 0;
+  if (sub.x >= parent.x + parent.w) {          // 子面板在右
+    bx0 = parent.x + parent.w;
+    bx1 = sub.x;
+  } else if (sub.x + sub.w <= parent.x) {      // 子面板在左
+    bx0 = sub.x + sub.w;
+    bx1 = parent.x;
+  } else {
+    return false;                              // 两侧都放不下的重叠态：无桥接区
+  }
+  const float row_t = parent.y + parent.ys[parent_idx];
+  const float row_b = row_t + parent.item_h;
+  const float by0 = std::min(row_t, sub.y);
+  const float by1 = std::max(row_b, sub.y + sub.h);
+  return px >= bx0 && px <= bx1 && py >= by0 && py <= by1;
+}
+
 void draw_ctx_menu(NVGcontext* vg, const Theme& t, const CtxMenuLayout& lay,
-                   const CtxMenuItem* items, int n, int hover, const DmgRect* clip) {
+                   const CtxMenuItem* items, int n, int hover, const DmgRect* clip,
+                   int sub_left_idx) {
   const auto& L = t.layout;
   // 纯绘制段：面板矩形现成（lay），整面板早退安全
   if (!dmg_hit(clip, lay.x, lay.y, lay.w, lay.h)) return;
@@ -777,12 +895,14 @@ void draw_ctx_menu(NVGcontext* vg, const Theme& t, const CtxMenuLayout& lay,
     text(vg, t, lay.x + L.ctxPadX + L.ctxCheckW, cy, L.titleFont, col, items[i].label);
     // v0.6.1 d347：二级子菜单父条目 —— 右缘画 ▸（手绘两段线，同 ✓ 不依赖字形；
     // 颜色随 hover 与文本一致；宽度借 ctxRightPad 区，几何不改）。
+    // d438：子菜单因右缘放不下翻到父面板左侧时，箭头改画 ◂（仍留在右缘，方向随展开侧）。
     if (items[i].sub) {
       const float ax0 = lay.x + lay.w - L.ctxRightPad * 0.75f;
+      const bool left = (i == sub_left_idx);
       nvgBeginPath(vg);
-      nvgMoveTo(vg, ax0, cy - 4.f);
-      nvgLineTo(vg, ax0 + 4.f, cy);
-      nvgLineTo(vg, ax0, cy + 4.f);
+      nvgMoveTo(vg, left ? ax0 + 4.f : ax0, cy - 4.f);
+      nvgLineTo(vg, left ? ax0 : ax0 + 4.f, cy);
+      nvgLineTo(vg, left ? ax0 + 4.f : ax0, cy + 4.f);
       nvgStrokeColor(vg, col);
       nvgStrokeWidth(vg, 2.f);
       nvgLineCap(vg, NVG_ROUND);

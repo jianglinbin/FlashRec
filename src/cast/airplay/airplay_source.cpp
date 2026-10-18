@@ -403,6 +403,9 @@ bool AirplaySource::start() {
   running_.store(true, std::memory_order_relaxed);
   last_feedback_at_.store(0.0);
   watchdog_armed_.store(false);
+  owned_ = false;            // ★d435：新栈尚未确认会话归属，等 SetUri 进快照
+  suppress_stop_.store(false, std::memory_order_relaxed);  // ★d435：解除 Stop 抑制
+  stream_->resume_feeds();   // ★d435：解除 teardown_stack 的入口暂停
   FR_LOG_INFO("{} 已启动：name=\"{}\" mac={} port={} pin_pw={} hls={} h265={}", kTag, name,
               mac_str, port, static_cast<int>(pin_pw), cfg_.airplay_hls ? 1 : 0,
               cfg_.airplay_h265 ? 1 : 0);
@@ -413,7 +416,18 @@ void AirplaySource::stop() {
   if (!running_.exchange(false)) return;
   // 无会话也无妨：publish Stop 让播放侧收敛（幂等，mpv 侧空转）
   publish_stop();
-  stream_->stop_streams("source stop");
+  teardown_stack("source stop");
+}
+
+// ★d435：lib 侧收尾（不碰播放侧状态）——stop() 与「被其它来源接管」共用。
+//   先 pause_feeds：stop_streams 复位会话后、raop_destroy 完成前若有在途 lib
+//   回调，会重新建会话并投 SetUri，把刚接管的 DLNA 会话抢回去。
+void AirplaySource::teardown_stack(const char* why) {
+  // 先抑制 Stop 上抛：raop_destroy 触发的 conn_destroy/conn_reset 回调会
+  // publish_stop，接管场景下必须挡住（见 suppress_stop_ 注释）。
+  suppress_stop_.store(true, std::memory_order_relaxed);
+  stream_->pause_feeds();
+  stream_->stop_streams(why);
   if (raop_) {
     raop_destroy(raop_);  // 内含 httpd 停止（退出顺序 §6.4）
     raop_ = nullptr;
@@ -426,7 +440,20 @@ void AirplaySource::stop() {
   }
   conn_count_.store(0);
   watchdog_armed_.store(false);
-  FR_LOG_INFO("{} 已停止", kTag);
+  owned_ = false;
+  FR_LOG_INFO("{} 已停止（{}）", kTag, why);
+}
+
+// ★d435：DLNA/本地投屏后到并已无条件接管（D6 会话互斥）⇒ 结束 AirPlay 会话。
+//   绝不能走 publish_stop()——那会把刚接管的 DLNA 会话停掉。UxPlay 没有
+//   接收端 → 手机的 TEARDOWN API（d321），raop_destroy 断 RTSP 是唯一手段；
+//   随即 start() 重新注册，手机端退出后仍可再次 AirPlay 投屏。
+void AirplaySource::preempt_for_other_source() {
+  if (!running_.exchange(false)) return;
+  FR_LOG_WARN("{} 其它投屏来源接管：结束 AirPlay 会话（不向播放侧发 Stop，断 RTSP 通知手机）",
+              kTag);
+  teardown_stack("preempted by other source");
+  start();
 }
 
 void AirplaySource::tick() {
@@ -466,20 +493,37 @@ bool AirplaySource::check_watchdog(double now_mono) {
 //   重新出现在手机列表）。旧实现只关数据通道（stop_streams）—— 手机 RTSP 会话
 //   仍活着，会继续推流并重新建立会话（真机实测「点停止手机端并未退出」的根因）。
 //   UxPlay 没有「接收端→手机」的 TEARDOWN 发送 API，断连接是唯一手段。
+// ★d435：另一条收尾条件 —— 快照来源已从 AirPlay 变成其它（DLNA/本地点播后到
+//   并接管，D6）。旧逻辑只认 snap.source == AirPlay，来源被改写后永远不触发，
+//   手机端一直不知道投屏已结束。owned_ 过滤「本会话 SetUri 尚未被播放侧消化」
+//   的瞬时态（此时来源还停留在此前的 DLNA 会话）。
 void AirplaySource::check_snapshot() {
   const PlaybackSnapshot snap = bus_.snapshot();
   const bool active = stream_->session_active();
-  if (active && snap.state == TransportState::Stopped && snap.source == CastSource::AirPlay) {
-    FR_LOG_INFO("{} 播放侧已进入 Stopped，整栈重启（手机端退出投屏，接收端重新注册）", kTag);
-    stop();
-    start();
+  if (!active) {
+    owned_ = false;
     return;
   }
+  if (snap.has_session && snap.source == CastSource::AirPlay) {
+    owned_ = true;
+    if (snap.state == TransportState::Stopped) {
+      FR_LOG_INFO("{} 播放侧已进入 Stopped，整栈重启（手机端退出投屏，接收端重新注册）", kTag);
+      stop();
+      start();
+    }
+    return;
+  }
+  if (owned_ && snap.has_session) preempt_for_other_source();
 }
 
 // ————————————————————————————— 会话与指令 —————————————————————————————
 
 void AirplaySource::publish_stop() {
+  // ★d435：收尾期间的 Stop 不得上抛（详见 suppress_stop_ 注释）。
+  if (suppress_stop_.load(std::memory_order_relaxed)) {
+    FR_LOG_DEBUG("{} 收尾中：抑制 Stop 指令上抛", kTag);
+    return;
+  }
   DmrCommand c;
   c.type = DmrCommand::Type::Stop;
   c.source = CastSource::AirPlay;

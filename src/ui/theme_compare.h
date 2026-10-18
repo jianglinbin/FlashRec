@@ -107,6 +107,7 @@ inline const char* theme_first_diff(const Theme& a, const Theme& b) {
   if (a.layout.ctxPadX != b.layout.ctxPadX) return "layout.ctxPadX";
   if (a.layout.ctxItemH != b.layout.ctxItemH) return "layout.ctxItemH";
   if (a.layout.ctxRadius != b.layout.ctxRadius) return "layout.ctxRadius";
+  if (a.layout.ctxEdgePad != b.layout.ctxEdgePad) return "layout.ctxEdgePad";
   if (a.layout.osdIconPad != b.layout.osdIconPad) return "layout.osdIconPad";
   if (a.layout.osdIconR != b.layout.osdIconR) return "layout.osdIconR";
   if (a.layout.osdVolIconR != b.layout.osdVolIconR) return "layout.osdVolIconR";

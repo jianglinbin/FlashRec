@@ -128,6 +128,10 @@ class MpvBridge {
   void set_speed(double s);  // d169：倍速（mpv speed 属性；1.0 = 原速）
   // d184：视频填充 —— cover=1（短边填满/居中/裁切，不变型无空白）/ contain=0（留黑边）
   void set_panscan(double p);
+  // ★d425：画面填充「拉伸」档本体 —— mpv `keepaspect`（no = 无视宽高比拉满输出
+  // 窗口；panscan 只能在 contain↔cover 间插值，变形填充必须靠它）。该属性跨
+  // loadfile 持久 ⇒ 成员持有 + load_uri 每次重申（d350/d422 残留教训同款防线）。
+  void set_keep_aspect(bool keep);
   // v0.6.1 d350：画面缩放（mpv `video-zoom`，**2^z 标度**：0=适配基准，1=2 倍，-1=半）
   // 与平移（`video-pan-x/y`，viewport 比例单位）。渲染侧属性：与 panscan（d184/d281）
   // 正交叠加；三数据路径（DLNA 直链/AirPlay 回流/HLS）统一生效，协议面零感知。
@@ -141,6 +145,9 @@ class MpvBridge {
   // RTX 专用解码器为首选备选。对已加载流属性不保证即时生效（d151 教训），
   // 有会话时按位重载续播。
   void set_hwdec_mode(int mode);
+  // ★d432：只写 mpv `hwdec` 属性，**绝不 loadfile**。供 AirPlay 会话的挂起档在
+  // 下一次会话的 load_uri 之前落值（新解码器随该次加载初始化）。
+  void apply_hwdec_mode(int mode);
   // d196：letterbox/留边底色 = 皮肤 stageBg（mpv background-color）。不设的话 contain 时
   // 留边恒为 mpv 默认黑，与浅色/彩色皮肤冲突。
   void set_background_color(const std::string& rgb_hex);
@@ -185,14 +192,21 @@ class MpvBridge {
   int sw_w_ = 0;
   int sw_h_ = 0;
 
-  // d151：降级后按位重载。needs_reload_ 渲染线程置位（切后端处）、主线程消费（tick）；
-  // last_uri_ 主线程写（load_uri 记录，已去 fragment），重载时复用。
+  // d151：按位重载。needs_reload_ 渲染线程置位（切后端处）、主线程消费（tick）。
+  // ★d428：cur_uri_/cur_fmt_ = 当前流描述（load_uri 无条件记录，**含回环流**）——
+  //   解码切换/后端降级的重载真值。旧设计（d269）排除回环流 ⇒ 镜像会话重载拿到
+  //   上一个点播会话的残留 URL（真机实证黑屏无声），已废弃该排除。
   std::atomic<bool> needs_reload_{false};
-  std::string last_uri_;
+  std::string cur_uri_;
+  std::string cur_fmt_;
   // d184：视频填充（panscan）= cover|contain 映射；load 时应用。
   double panscan_ = 1.0;
+  // ★d425：keepaspect（拉伸档 = false）；load 时与 panscan_ 一起重申。
+  bool keep_aspect_ = true;
   // d350：画面缩放/平移（渲染侧会话级状态；load 时重置）。
-  double video_zoom_ = 1.0;
+  // ★d422 修正：video-zoom 是 2^z 标度，0 = 适配基准 = 100%——旧默认/复位值
+  //   1.0 在 d351 改 log2 映射前属线性残留（1.0 = 200%），每个新会话都 2 倍开局。
+  double video_zoom_ = 0.0;
   double video_pan_x_ = 0.0;
   double video_pan_y_ = 0.0;
   // d196：留边底色 "#rrggbb"；load 时应用。

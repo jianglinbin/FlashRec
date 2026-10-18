@@ -1,9 +1,15 @@
 #include "app/render_loop.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+
+// ★包含顺序铁律：log.h（→ spdlog → os-inl.h → windows.h）必须先于 glfw3.h——
+// glfw3.h 把 APIENTRY 定义为 __stdcall 且不撤销，后到的 minwindef.h 重定义成
+// WINAPI 会产生 C4005 宏重定义警告；windows.h 先到则 glfw3.h 检测已定义直接跳过。
+#include "app/log.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -12,7 +18,6 @@
 
 #include "app/event_bus.h"
 #include "app/i18n.h"  // v0.6.2 d362：界面文案多语言
-#include "app/log.h"
 #include "platform/gl_lock.h"
 #include "platform/interaction.h"
 #include "platform/seh_guard.h"
@@ -77,7 +82,9 @@ bool input_changed(const ViewInput& a, const ViewInput& b) {
          a.maximized != b.maximized || a.win_radius != b.win_radius ||
          a.osd_kind != b.osd_kind || a.osd_value != b.osd_value || a.osd_at != b.osd_at ||
          a.osd_dir != b.osd_dir ||
-         a.clip_visible != b.clip_visible || a.clip_at != b.clip_at;  // d74 提示条
+         a.clip_visible != b.clip_visible || a.clip_at != b.clip_at ||  // d74 提示条
+         a.popup_l != b.popup_l || a.popup_t != b.popup_t ||            // d438 菜单可用区
+         a.popup_r != b.popup_r || a.popup_b != b.popup_b;
 }
 
 namespace {
@@ -390,7 +397,10 @@ void RenderLoop::frame(double now) {
   double dt = now - prev_now_;
   if (dt < 0 || dt > 0.1) dt = 0.1;
 
-  // 输入快照（副本）+ 本帧动画状态
+  // d440：先取复位请求再读快照。主线程顺序 = request_input_reset → 复位 in → publish；
+  // 若本帧在 publish 之前就看到请求（快照仍是旧值），下面的复位块会把 down_prev_
+  // 对齐旧值并清空指针状态 —— 下一帧看到抬起时状态机已是 Idle，不会合成点击。
+  const bool input_reset = input_reset_.exchange(false, std::memory_order_acq_rel);
   ViewInput in = channel_.input_snapshot();
   // 渲染线程独占槽里的跨帧状态必须逐帧续接（快照里的同名字段恒为默认值）：
   //   - btns：ButtonFx 时钟状态，漏了 → press_id 每帧归零、clicked 边沿判不出，
@@ -409,7 +419,59 @@ void RenderLoop::frame(double now) {
   in.click_consumed = false;
   in.fullscreen = window_.fullscreen();
   in.maximized = window_.maximized();
-  in.win_radius = (in.fullscreen || in.maximized) ? 0.f : theme_.shape.windowRadius;
+  // d439：最大化态进画中画时 OS 的 maximized 标记仍为真（见 main Pip 意图），
+  // 但小窗是自管矩形、有工具窗圆角 —— 圆角只看「全屏」或「非画中画的最大化」。
+  in.win_radius =
+      (in.fullscreen || (in.maximized && !pip_mode_)) ? 0.f : theme_.shape.windowRadius;
+
+  // d440：跨线程镜像 / 帧首命令。帮助开关由渲染线程独占持有，主线程只登记意图；
+  // set_help 的互斥收起也在这里落地（原实现主线程直写渲染线程状态）。
+  {
+    const int hp = help_pending_.exchange(-1, std::memory_order_acq_rel);
+    if (hp >= 0) {
+      help_open_ = hp != 0;
+      if (help_open_) {
+        ctx_open_ = false;
+        close_ctx_sub();
+        speed_open_ = false;
+        skin_open_ = false;
+      }
+      force_dirty_.store(true, std::memory_order_release);
+    }
+  }
+
+  // d440：焦点丢失复位 —— 原地清状态，绝不合成「弹起」：down_prev_ 对齐当前
+  // 快照（主线程已把按键复位并发布），菜单按压锁与双击链一并失效。
+  if (input_reset) {
+    ptr_state_ = PtrState::Idle;
+    ptr_region_ = PtrRegion::None;
+    down_prev_ = in.down;
+    in_dbl_ = false;
+    up1_at_ = 0;
+    pend_single_ = false;
+    mid_prev_ = in.down_middle;
+    right_prev_ = in.down_right;
+    ctx_press_ = -1;
+    ctx_lprev_ = in.down;
+    speed_press_ = -1;
+    speed_lprev_ = in.down;
+    skin_press_ = -1;
+    skin_lprev_ = in.down;
+    ctx_sub_press_ = -1;
+    ctx_sub_lprev_ = in.down;
+    help_lprev_ = in.down;
+    // 按钮/滑条的跨帧状态在渲染线程槽里：不清会合成一次按钮 click，或在下一帧
+    // 以「!down = 松手」把拖拽值提交成 seek / 音量（chrome 的提交条件）。
+    in.btns.press_id = -1;
+    in.btns.was_down = false;
+    in.drag_progress = false;
+    in.drag_volume = false;
+    in.drag_value = 0.f;
+    // 复位请求可能早于新快照可见（快照里右键仍按下）：随后那次抬起只用于清抑制
+    // 标记，不得弹出菜单。
+    if (in.down_right) ctx_right_suppress_ = true;
+    force_dirty_.store(true, std::memory_order_release);
+  }
 
   // —— d45：右键菜单状态机（必须跑在跳帧判定**之前**：按下/弹起边沿一帧都不能漏，
   //     否则"按下记位、弹起开菜单"的配对会错乱。状态切换时置 force_dirty 保证
@@ -449,7 +511,7 @@ void RenderLoop::frame(double now) {
       right_x_ = in.mx;
       right_y_ = in.my;
     } else if (!in.down_right && right_prev_) {       // 右键弹起边沿
-      if (!ctx_right_suppress_ && !ctx_open_) {
+      if (!ctx_right_suppress_ && !ctx_open_ && !help_open_) {
         const float dx = in.mx - right_x_, dy = in.my - right_y_;
         if (dx * dx + dy * dy <= 36.f) {              // 原地弹起（6px 防抖，d25 同口径）
           ctx_open_ = true;
@@ -480,6 +542,12 @@ void RenderLoop::frame(double now) {
       snap_ver_seen_ = sver;
     }
   }
+  // ★d432：解码档位真值同步（active = 最近一次实际下发；pending = AirPlay 会话
+  //   挂起档）。必须在菜单构造之前读取，菜单打开当帧即能显示「下次生效」。
+  hwdec_mode_ = player_.active_hwdec_mode();
+  pending_hwdec_ = player_.pending_hwdec_mode();
+  if (media_.hwname == "no") hwdec_mode_ = 0;  // 硬解不可用回落软解的真值
+
   const bool has_picture = snap.picture_ready && !snap.uri.empty();
 
   // —— d53：视频帧旗标 peek（每 wake 恰好一次，skip/限流路径也不丢）——
@@ -1188,14 +1256,32 @@ void RenderLoop::frame(double now) {
   // 的 ys[24]/sep[24] 成对扩容，两处必须同改）。
   // v0.6.1 d347：二级子菜单（「窗口大小」）——子条目表/布局与主菜单同帧重算，
   // 状态成员见 render_loop.h（ctx_sub_*）；关闭点统一走成员 close_ctx_sub()。
-  CtxMenuItem ctx_items[24];
+  CtxMenuItem ctx_items[CtxMenuLayout::kMaxItems];
   int ctx_n = 0;
   CtxMenuLayout ctx_lay;
   int ctx_hover = -1;
-  CtxMenuItem sub_items[8];
+  CtxMenuItem sub_items[CtxMenuLayout::kMaxItems];
   int sub_n = 0;
   CtxMenuLayout sub_lay;
   bool in_sub = false;
+  bool sub_left = false;      // 子面板翻到父面板左侧（箭头翻转）
+  int sub_parent_idx = -1;    // 当前展开的父条目下标（-1 = 未展开）
+  // d438：弹出可用区 = 窗口（留 ctxEdgePad）∩ 锚点所在显示器工作区。
+  // 工作区由主线程在右键按下时算好（视口字段）；无有效信息 → 整窗。
+  PopupArea popup_area;
+  const float edge = theme_.layout.ctxEdgePad;
+  popup_area.l = edge;
+  popup_area.t = edge;
+  popup_area.r = (float)w - edge;
+  popup_area.b = (float)h - edge;
+  if (in.popup_r > in.popup_l && in.popup_b > in.popup_t) {
+    popup_area.l = std::max(popup_area.l, in.popup_l);
+    popup_area.t = std::max(popup_area.t, in.popup_t);
+    popup_area.r = std::min(popup_area.r, in.popup_r);
+    popup_area.b = std::min(popup_area.b, in.popup_b);
+    if (popup_area.r <= popup_area.l || popup_area.b <= popup_area.t)
+      popup_area = PopupArea{edge, edge, (float)w - edge, (float)h - edge};
+  }
   if (ctx_open_) {
     const bool media = snap.has_session;
     // ★d322：AirPlay 会话禁用「播放 / 暂停」条目（直播流不支持暂停，与底栏同判定）
@@ -1226,7 +1312,15 @@ void RenderLoop::frame(double now) {
     // v0.6.1 d353：解码选择改二级子菜单（d352 的二值开关不够用——真机证实
     // auto-safe 选中的 d3d11va-copy 花屏，需要可选硬解后端；双显卡机 NVDEC
     // 走 RTX 专用解码器）。父条目手工构造（sub=true 画 ▸）：
-    ctx_items[ctx_n++] = {tr(i18n::StrId::CtxDecode), CtxAction::DecodeMenu, true,
+    // ★d432：有挂起档时父条目也标「下次生效」，不展开子菜单也能看到。
+    const bool decode_pending = pending_hwdec_ >= 0 && pending_hwdec_ != hwdec_mode_;
+    const char* decode_parent_label = tr(i18n::StrId::CtxDecode);
+    if (decode_pending) {
+      ctx_decode_parent_label_ =
+          std::string(tr(i18n::StrId::CtxDecode)) + tr(i18n::StrId::CtxDecodeNextCast);
+      decode_parent_label = ctx_decode_parent_label_.c_str();
+    }
+    ctx_items[ctx_n++] = {decode_parent_label, CtxAction::DecodeMenu, true,
                           false, false, true};
     add(nullptr, CtxAction::None, false);
     // v0.6.1 d347：窗口大小改二级子菜单——主菜单只留父条目（sub=true 画 ▸，
@@ -1234,91 +1328,133 @@ void RenderLoop::frame(double now) {
     // add lambda 无 sub 参数，父条目手工构造：
     ctx_items[ctx_n++] = {tr(i18n::StrId::CtxWindowSize), CtxAction::WindowZoomMenu, true,
                           false, false, true};
-    // v0.6.2 d362：UI 语言二级子菜单（父条目同款 ▸；子项勾选 = i18n::lang 镜像，
-    // 激活 post LanguageChanged 意图 → 主线程换语言 + 落盘 + 回推全帧重绘）
-    ctx_items[ctx_n++] = {tr(i18n::StrId::CtxLanguage), CtxAction::LanguageMenu, true,
+    // d421：语言子菜单已从右键菜单移除（d362 引入）——语言切换只保留系统托盘
+    // 勾选组（id 20/21，apply_language 共用入口）；CtxLanguage 文案键保留不删。
+    // 右键菜单「画面缩放」二级子菜单（父条目同款 ▸；七档 = 画面相对窗口 50–500%，
+    // 勾选 = vzoom_pct_ 镜像；激活 post VideoZoom 意图 → 主线程 set_video_zoom 执行）
+    ctx_items[ctx_n++] = {tr(i18n::StrId::CtxVideoZoom), CtxAction::VideoZoomMenu, true,
+                          false, false, true};
+    // d426：画面填充二级子菜单父条目（同款 ▸；四档 = 自动/铺满/完整画面/拉伸，
+    // 真值 = player.fit_mode 持久偏好，勾选 = fit_mode_ 镜像）。
+    ctx_items[ctx_n++] = {tr(i18n::StrId::CtxFitMode), CtxAction::FitModeMenu, true,
                           false, false, true};
     add(nullptr, CtxAction::None, false);
     if (in.fullscreen)
       add(tr(i18n::StrId::CtxStop), CtxAction::Stop, media);
     else
       add(tr(i18n::StrId::CtxExit), CtxAction::Close, true);
-    ctx_lay = ctx_menu_layout(nvg_.ctx(), theme_, (float)w, (float)h, ctx_items, ctx_n,
+    ctx_lay = ctx_menu_layout(nvg_.ctx(), theme_, popup_area, ctx_items, ctx_n,
                               ctx_anchor_x_, ctx_anchor_y_);
     ctx_hover = ctx_lay.item_at(in.mx, in.my);
 
-    // —— v0.6.1 d347/d353 + v0.6.2 d362：二级子菜单构造 + 布局 + hover 展开/收起
-    //（三个父条目：「窗口大小」/「解码」/「语言」，ctx_sub_kind_ 分派：
-    //  0=窗口大小 1=解码 2=语言）。子条目表每帧重建（主菜单条目表本身条件增减，
-    //  父条目下标每帧重扫不缓存）。 ——
+    // —— d438：二级子菜单构造/布局/展开收起 ——
+    // 父条目身份 = CtxAction（ctx_sub_parent_），子条目表按父条目每帧重建。
+    // 相对旧实现的三处关键修正：
+    //   1. 顶对齐 + 横向翻转：子面板顶 = 父条目顶；右缘放不下翻到左侧
+    //      （ctx_submenu_layout，可用区 = 窗口 ∩ 显示器工作区）。
+    //   2. 保活走廊：父/子面板之间的间隙与纵向包络（ctx_submenu_bridge_hit）
+    //      经过时不收起 —— 2px 间隙/分隔线/内边距不再把子菜单误关。
+    //   3. 同帧切换：hover 到另一个父条目立即换内容并重排（旧实现要等下一帧）。
+    auto build_sub_items = [&](CtxAction parent) {
+      int sn = 0;
+      if (parent == CtxAction::DecodeMenu) {
+        // d353：解码四档（勾选 = hwdec_mode_ 镜像；与 mpv_bridge 的模式表一一对应）
+        // ★d432：挂起档 = 未勾选 + 后缀「（下次生效）」；只可能命中一档，
+        //   故单个缓冲 ctx_decode_item_label_ 足够（每帧重建、同帧使用）。
+        auto decode_label = [&](i18n::StrId id, int mode) -> const char* {
+          if (pending_hwdec_ == mode && pending_hwdec_ != hwdec_mode_) {
+            ctx_decode_item_label_ =
+                std::string(tr(id)) + tr(i18n::StrId::CtxDecodeNextCast);
+            return ctx_decode_item_label_.c_str();
+          }
+          return tr(id);
+        };
+        sub_items[sn++] = {decode_label(i18n::StrId::CtxDecodeSw, 0),
+                           CtxAction::DecodeSw, true, true, hwdec_mode_ == 0};
+        sub_items[sn++] = {decode_label(i18n::StrId::CtxDecodeAuto, 1),
+                           CtxAction::DecodeAuto, true, true, hwdec_mode_ == 1};
+        sub_items[sn++] = {decode_label(i18n::StrId::CtxDecodeNvdec, 2),
+                           CtxAction::DecodeNvdec, true, true, hwdec_mode_ == 2};
+        sub_items[sn++] = {decode_label(i18n::StrId::CtxDecodeDxva2, 3),
+                           CtxAction::DecodeDxva2, true, true, hwdec_mode_ == 3};
+      } else if (parent == CtxAction::WindowZoomMenu) {
+        sub_items[sn++] = {"50%", CtxAction::Zoom50, true, true, zoom_pct_ == 50};
+        sub_items[sn++] = {"100%", CtxAction::Zoom100, true, true, zoom_pct_ == 100};
+        sub_items[sn++] = {"150%", CtxAction::Zoom150, true, true, zoom_pct_ == 150};
+        sub_items[sn++] = {"200%", CtxAction::Zoom200, true, true, zoom_pct_ == 200};
+        // v0.6.1 d354：上限 300% → 500%，新增三档（与数字键 1–7 同步）。
+        sub_items[sn++] = {"300%", CtxAction::Zoom300, true, true, zoom_pct_ == 300};
+        sub_items[sn++] = {"400%", CtxAction::Zoom400, true, true, zoom_pct_ == 400};
+        sub_items[sn++] = {"500%", CtxAction::Zoom500, true, true, zoom_pct_ == 500};
+      } else if (parent == CtxAction::VideoZoomMenu) {
+        // 右键菜单「画面缩放」七档（勾选 = vzoom_pct_ 镜像；档位表与「窗口大小」
+        // 子菜单一致 50/100/150/200/300/400/500，语义 = 画面相对窗口的缩放）。
+        sub_items[sn++] = {"50%", CtxAction::VZoom50, true, true, vzoom_pct_ == 50};
+        sub_items[sn++] = {"100%", CtxAction::VZoom100, true, true, vzoom_pct_ == 100};
+        sub_items[sn++] = {"150%", CtxAction::VZoom150, true, true, vzoom_pct_ == 150};
+        sub_items[sn++] = {"200%", CtxAction::VZoom200, true, true, vzoom_pct_ == 200};
+        sub_items[sn++] = {"300%", CtxAction::VZoom300, true, true, vzoom_pct_ == 300};
+        sub_items[sn++] = {"400%", CtxAction::VZoom400, true, true, vzoom_pct_ == 400};
+        sub_items[sn++] = {"500%", CtxAction::VZoom500, true, true, vzoom_pct_ == 500};
+      } else if (parent == CtxAction::FitModeMenu) {
+        // d426：画面填充四档（勾选 = fit_mode_ 镜像；真值 = player.fit_mode
+        // 持久偏好。激活 post FitMode 意图 → 主线程落盘 + 下发播放器）。
+        sub_items[sn++] = {tr(i18n::StrId::FitModeAuto), CtxAction::FitModeAuto, true,
+                           true, fit_mode_ == 0};
+        sub_items[sn++] = {tr(i18n::StrId::FitModeCover), CtxAction::FitModeCover, true,
+                           true, fit_mode_ == 1};
+        sub_items[sn++] = {tr(i18n::StrId::FitModeContain), CtxAction::FitModeContain,
+                           true, true, fit_mode_ == 2};
+        sub_items[sn++] = {tr(i18n::StrId::FitModeStretch), CtxAction::FitModeStretch,
+                           true, true, fit_mode_ == 3};
+      }
+      sub_n = sn;
+    };
+
     ctx_sub_hover_ = -1;
     if (ctx_sub_open_) {
       // 父条目仍存在才维持展开；否则（菜单重建/会话变化）收起
-      const CtxAction parent_act = ctx_sub_kind_ == 1  ? CtxAction::DecodeMenu
-                                   : ctx_sub_kind_ == 2 ? CtxAction::LanguageMenu
-                                                        : CtxAction::WindowZoomMenu;
-      int pidx = -1;
       for (int i = 0; i < ctx_n; ++i)
-        if (ctx_items[i].action == parent_act) pidx = i;
-      if (pidx < 0) {
-        ctx_sub_open_ = false;
-      } else {
-        int sn = 0;
-        if (ctx_sub_kind_ == 1) {
-          // d353：解码四档（勾选 = hwdec_mode_ 镜像；与 mpv_bridge 的模式表一一对应）
-          sub_items[sn++] = {tr(i18n::StrId::CtxDecodeSw), CtxAction::DecodeSw, true, true,
-                             hwdec_mode_ == 0};
-          sub_items[sn++] = {tr(i18n::StrId::CtxDecodeAuto), CtxAction::DecodeAuto, true,
-                             true, hwdec_mode_ == 1};
-          sub_items[sn++] = {tr(i18n::StrId::CtxDecodeNvdec), CtxAction::DecodeNvdec, true,
-                             true, hwdec_mode_ == 2};
-          sub_items[sn++] = {tr(i18n::StrId::CtxDecodeDxva2), CtxAction::DecodeDxva2, true,
-                             true, hwdec_mode_ == 3};
-        } else if (ctx_sub_kind_ == 2) {
-          // d362：语言两档（语言名按惯例恒用本名，不随界面语言变；
-          // 勾选 = i18n::lang 镜像，激活 post LanguageChanged 意图）
-          const bool zh = i18n::lang() == i18n::Lang::ZhCn;
-          sub_items[sn++] = {tr(i18n::StrId::LangZhName), CtxAction::LanguageZh, true, true,
-                             zh};
-          sub_items[sn++] = {tr(i18n::StrId::LangEnName), CtxAction::LanguageEn, true, true,
-                             !zh};
-        } else {
-          sub_items[sn++] = {"50%", CtxAction::Zoom50, true, true, zoom_pct_ == 50};
-          sub_items[sn++] = {"100%", CtxAction::Zoom100, true, true, zoom_pct_ == 100};
-          sub_items[sn++] = {"150%", CtxAction::Zoom150, true, true, zoom_pct_ == 150};
-          sub_items[sn++] = {"200%", CtxAction::Zoom200, true, true, zoom_pct_ == 200};
-          // v0.6.1 d354：上限 300% → 500%，新增三档（与数字键 1–7 同步）。
-          sub_items[sn++] = {"300%", CtxAction::Zoom300, true, true, zoom_pct_ == 300};
-          sub_items[sn++] = {"400%", CtxAction::Zoom400, true, true, zoom_pct_ == 400};
-          sub_items[sn++] = {"500%", CtxAction::Zoom500, true, true, zoom_pct_ == 500};
+        if (ctx_items[i].action == ctx_sub_parent_) {
+          sub_parent_idx = i;
+          break;
         }
-        sub_n = sn;
-        // 锚 = 父条目右缘中点（ctx_menu_layout 内部做越界回夹，贴右缘自动左弹）
-        sub_lay = ctx_menu_layout(nvg_.ctx(), theme_, (float)w, (float)h, sub_items, sub_n,
-                                  ctx_lay.x + ctx_lay.w,
-                                  ctx_lay.y + ctx_lay.ys[pidx] + ctx_lay.item_h * 0.5f);
-        ctx_sub_hover_ = sub_lay.item_at(in.mx, in.my);
-        in_sub = in.mx >= sub_lay.x && in.mx < sub_lay.x + sub_lay.w &&
-                 in.my >= sub_lay.y && in.my < sub_lay.y + sub_lay.h;
-        // 光标既不在父条目也不在子面板 → 收起（hover 展开的对偶；父条目 hover
-        // 展开在下面统一处理）
-        if (!in_sub && ctx_hover != pidx) ctx_sub_open_ = false;
-      }
+      if (sub_parent_idx < 0) close_ctx_sub();
     }
-    // hover 到父条目 → 展开（Windows 惯例；force_dirty 保证出现帧被画出）。
-    // d353：记录展开的是哪个父条目（子菜单构造/交互分派依据）。
-    // d362：语言父条目同款（kind=2）。
-    if (ctx_open_ && !ctx_sub_open_ && ctx_hover >= 0 && ctx_items[ctx_hover].enabled) {
-      const CtxAction hact = ctx_items[ctx_hover].action;
-      if (hact == CtxAction::WindowZoomMenu || hact == CtxAction::DecodeMenu ||
-          hact == CtxAction::LanguageMenu) {
+    // hover 到父条目 → 展开；已在别的父条目上 → 同帧切换内容
+    if (ctx_hover >= 0 && ctx_items[ctx_hover].enabled &&
+        ctx_is_submenu_parent(ctx_items[ctx_hover].action)) {
+      const CtxAction act = ctx_items[ctx_hover].action;
+      if (!ctx_sub_open_ || ctx_sub_parent_ != act) {
         ctx_sub_open_ = true;
-        ctx_sub_kind_ = hact == CtxAction::DecodeMenu    ? 1
-                        : hact == CtxAction::LanguageMenu ? 2
-                                                          : 0;
+        ctx_sub_parent_ = act;
+        ctx_sub_press_ = -1;
+        ctx_sub_lprev_ = in.down;  // 触发展开的这次按压不算子条目按压
         force_dirty_.store(true, std::memory_order_release);
       }
+      sub_parent_idx = ctx_hover;
     }
+    if (ctx_sub_open_ && sub_parent_idx >= 0) {
+      build_sub_items(ctx_items[sub_parent_idx].action);
+      sub_lay = ctx_submenu_layout(nvg_.ctx(), theme_, popup_area, sub_items, sub_n,
+                                   ctx_lay, sub_parent_idx, &sub_left);
+      ctx_sub_hover_ = sub_lay.item_at(in.mx, in.my);
+      in_sub = sub_lay.contains(in.mx, in.my);
+      // 保活：子面板内 / 父子之间的走廊 / 父条目上 / 父面板空白（分隔线、内边距）
+      const bool keep = in_sub ||
+                        ctx_submenu_bridge_hit(ctx_lay, sub_lay, sub_parent_idx, in.mx,
+                                               in.my) ||
+                        ctx_hover == sub_parent_idx ||
+                        (ctx_hover < 0 && ctx_lay.contains(in.mx, in.my));
+      if (!keep) {
+        close_ctx_sub();
+        sub_parent_idx = -1;
+        in_sub = false;
+        ctx_sub_hover_ = -1;
+      }
+    }
+    // 子面板是更上层：指针在其内时主菜单不得把命中算到下面那层
+    if (ctx_sub_open_ && in_sub) ctx_hover = -1;
   }
 
   // —— d169：倍速档位弹层几何（开着的帧才需要；命中与绘制共用同一份）——
@@ -1432,7 +1568,7 @@ void RenderLoop::frame(double now) {
       // 其余情况照旧：激活命中条目并收菜单；弹起在子面板内豁免收主菜单。
       const bool on_sub_parent =
           ctx_press_ >= 0 && ctx_press_ == ctx_hover && ctx_press_ < ctx_n &&
-          ctx_items[ctx_press_].action == CtxAction::WindowZoomMenu;
+          ctx_is_submenu_parent(ctx_items[ctx_press_].action);
       if (on_sub_parent) {
         // 仅确保子菜单展开（hover 已展开过；此处兜底直点场景）
         force_dirty_.store(true, std::memory_order_release);
@@ -1485,37 +1621,74 @@ void RenderLoop::frame(double now) {
           case CtxAction::Zoom500:
             channel_.post_intent({UiIntent::Kind::WindowZoom, 500.0});
             break;
+          // 右键菜单「画面缩放」七档：post VideoZoom 意图（value = 百分比），
+          // 主线程 set_video_zoom 执行（clamp 50–500 → mpv video-zoom → OSD kind6），
+          // 勾选经 set_video_zoom → render.set_video_zoom_pct 回推后自然对齐。
+          case CtxAction::VZoom50:
+            channel_.post_intent({UiIntent::Kind::VideoZoom, 50.0});
+            break;
+          case CtxAction::VZoom100:
+            channel_.post_intent({UiIntent::Kind::VideoZoom, 100.0});
+            break;
+          case CtxAction::VZoom150:
+            channel_.post_intent({UiIntent::Kind::VideoZoom, 150.0});
+            break;
+          case CtxAction::VZoom200:
+            channel_.post_intent({UiIntent::Kind::VideoZoom, 200.0});
+            break;
+          case CtxAction::VZoom300:
+            channel_.post_intent({UiIntent::Kind::VideoZoom, 300.0});
+            break;
+          case CtxAction::VZoom400:
+            channel_.post_intent({UiIntent::Kind::VideoZoom, 400.0});
+            break;
+          case CtxAction::VZoom500:
+            channel_.post_intent({UiIntent::Kind::VideoZoom, 500.0});
+            break;
+          // ★d432：只投意图，不本地翻转勾选 —— 勾选真值由播放器回读（AirPlay
+          //   会话中可能只挂起、当前档不变；主线程的 OSD 也会据此分流）。
           case CtxAction::DecodeSw:
-            hwdec_mode_ = 0;
             channel_.post_intent({UiIntent::Kind::DecodeMode, 0.0});
             break;
           case CtxAction::DecodeAuto:
-            hwdec_mode_ = 1;
             channel_.post_intent({UiIntent::Kind::DecodeMode, 1.0});
             break;
           case CtxAction::DecodeNvdec:
-            hwdec_mode_ = 2;
             channel_.post_intent({UiIntent::Kind::DecodeMode, 2.0});
             break;
           case CtxAction::DecodeDxva2:
-            hwdec_mode_ = 3;
             channel_.post_intent({UiIntent::Kind::DecodeMode, 3.0});
             break;
-          // v0.6.2 d362：语言子菜单激活 —— 语言真值在 i18n 模块（原子量），
-          // 渲染线程不本地翻转；post 意图由主线程 set_lang + 落盘 + tooltip +
-          // set_language 回推（force_dirty 全帧重绘）。
-          case CtxAction::LanguageZh:
-            channel_.post_intent({UiIntent::Kind::LanguageChanged, 0.0});
+          // d426：画面填充四档 —— 渲染线程本地翻转勾选镜像（本帧反馈）+ post
+          // FitMode 意图（value = 模式号），主线程落盘 player.fit_mode + 下发
+          // 播放器 + OSD kind7，再经 set_fit_mode 回推（幂等对齐）。
+          case CtxAction::FitModeAuto:
+            fit_mode_ = 0;
+            channel_.post_intent({UiIntent::Kind::FitMode, 0.0});
             break;
-          case CtxAction::LanguageEn:
-            channel_.post_intent({UiIntent::Kind::LanguageChanged, 1.0});
+          case CtxAction::FitModeCover:
+            fit_mode_ = 1;
+            channel_.post_intent({UiIntent::Kind::FitMode, 1.0});
             break;
+          case CtxAction::FitModeContain:
+            fit_mode_ = 2;
+            channel_.post_intent({UiIntent::Kind::FitMode, 2.0});
+            break;
+          case CtxAction::FitModeStretch:
+            fit_mode_ = 3;
+            channel_.post_intent({UiIntent::Kind::FitMode, 3.0});
+            break;
+          // d421：LanguageZh/En 激活分支已随右键语言子菜单撤除——语言切换只走
+          // 系统托盘勾选组（main 侧 on_menu_action id 20/21 → apply_language）。
           default: break;
         }
         ctx_open_ = false;
         close_ctx_sub();
       } else {
-        close_ctx_sub();                            // 点子面板外/空白 = 只收子菜单
+        // d438：点父条目保持展开（hover 已展开；按住父条目再松开不得误收）；
+        // 其余（含子面板空白）= 只收子菜单，主菜单保留。
+        const bool parent_click = sub_parent_idx >= 0 && ctx_hover == sub_parent_idx;
+        if (!parent_click) close_ctx_sub();
       }
       force_dirty_.store(true, std::memory_order_release);
     }
@@ -1691,12 +1864,8 @@ void RenderLoop::frame(double now) {
     media_.vcodec = st.video_codec;
     media_.acodec = st.audio_codec;
     media_.hwname = st.hwdec_name;
-    // v0.6.1 d353：解码方式镜像真值校正（重载完成/后端不可用回落都会反映到
-    // 这里）。"no" = 软解 → 镜像归 0；非 "no" 无法区分具体硬解后端，维持现值。
-    if (!media_.hwname.empty()) {
-      if (media_.hwname == "no") hwdec_mode_ = 0;
-      else if (hwdec_mode_ == 0) hwdec_mode_ = 1;  // 软解镜像但实测硬解 → 回默认档
-    }
+    // ★d432：解码勾选真值改由帧顶部 active_hwdec_mode + hwdec-current("no")
+    // 回读，此处只更新徽章数据源（原「非 no 无法区分后端」的猜测已废弃）。
   }
 
   // —— d44/d45 → d146 R5 常驻徽章（叠在视频/舞台左上角，画中画小窗不画）——
@@ -1912,9 +2081,13 @@ void RenderLoop::frame(double now) {
     draw_skin_menu(nvg_.ctx(), theme_, skin_lay, skin_names_, skin_cur_, skin_hover, clip);
 
   // —— d45：右键菜单（全栈最顶层：盖过视图与徽章）——
+  // d438：子菜单展开时父条目保持高亮（指针进子面板后 ctx_hover 归 -1）；
+  // 子面板翻到左侧时父条目箭头改画 ◂。
   if (!pip_mode_ && ctx_open_)
-    draw_ctx_menu(nvg_.ctx(), theme_, ctx_lay, ctx_items, ctx_n, ctx_hover, clip);
-  // —— v0.6.1 d347：二级子菜单（比主菜单更顶层；锚在父条目右缘）——
+    draw_ctx_menu(nvg_.ctx(), theme_, ctx_lay, ctx_items, ctx_n,
+                  (ctx_sub_open_ && sub_parent_idx >= 0) ? sub_parent_idx : ctx_hover, clip,
+                  (ctx_sub_open_ && sub_left) ? sub_parent_idx : -1);
+  // —— v0.6.1 d347：二级子菜单（比主菜单更顶层；顶对齐父条目、越界翻左）——
   if (!pip_mode_ && ctx_sub_open_)
     draw_ctx_menu(nvg_.ctx(), theme_, sub_lay, sub_items, sub_n, ctx_sub_hover_, clip);
   // —— v0.6.1 d350：F1 帮助面板（浮层栈顶；全屏遮罩压暗 + 居中快捷键表）——

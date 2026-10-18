@@ -334,6 +334,9 @@ Config Config::load(const std::string& path) {
   // d169：倍速持久化（player.speed，夹到 0.25..4.0）
   cfg.player_speed = get_double("player.speed", cfg.player_speed);
   if (cfg.player_speed < 0.25) cfg.player_speed = 0.25;
+  // d425：画面填充模式持久化（player.fit_mode；越界一律回默认 0 自动）
+  cfg.player_fit_mode = get_int("player.fit_mode", cfg.player_fit_mode);
+  if (cfg.player_fit_mode < 0 || cfg.player_fit_mode > 3) cfg.player_fit_mode = 0;
 
   // —— airplay（v0.6.0 d267；§9 键表；FR_AIRPLAY=OFF 时这些值不被消费）——
   cfg.airplay_enabled = get_bool("airplay.enabled", cfg.airplay_enabled);

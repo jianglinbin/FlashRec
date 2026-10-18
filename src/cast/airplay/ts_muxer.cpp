@@ -573,6 +573,12 @@ bool TsMuxer::fill_silence(uint64_t now_90k) {
   return true;
 }
 
+// ★d429：PSI 立即重发请求（见 ts_muxer.h 注释）。一次性：置位后由最近一轮 tick
+//   消费（tick 里的 PSI 段 exchange 清零），期间多次置位幂等。
+void TsMuxer::request_psi_resync() {
+  psi_resync_.store(true, std::memory_order_release);
+}
+
 void TsMuxer::tick(uint64_t now_90k) {
   if (broken_ || !sink_) return;
   // d272 防御：契约要求 now 单调递增（mux 线程的 mono_sec 保证）。若调用方
@@ -590,7 +596,11 @@ void TsMuxer::tick(uint64_t now_90k) {
   // ★d282：PAT/PMT 周期重发（见 kPsiPeriod 说明）。周期锚在**轴**上：轴不走 =
   //   没有数据在发，不必补 PSI；一旦恢复（轴跳跃），下一轮立刻补发 ⇒ 丢片/停滞
   //   之后 mpv 拿到完整 PSI 即可重新同步，不必等 EOF。
-  if (!psi_seeded_ || now_90k - last_psi_at_ >= kPsiPeriod) {
+  //   ★d429：request_psi_resync() 置位的一次性请求同样在此消费 —— 回环重连后
+  //   新 demuxer 的 16384B 探测窗内必须出现 PAT/PMT（否则 PMT 弃用、音频盲探成
+  //   mp3、视频轨缺失），不能赌 100ms 周期恰好落在窗内。
+  if (psi_resync_.exchange(false, std::memory_order_acq_rel) ||
+      !psi_seeded_ || now_90k - last_psi_at_ >= kPsiPeriod) {
     psi_seeded_ = true;
     last_psi_at_ = now_90k;
     if (!emit_psi(true)) return;   // PAT

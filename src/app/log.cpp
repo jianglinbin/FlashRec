@@ -55,6 +55,13 @@ void init_logger(const std::string& dir, const std::string& level, bool with_con
   }
 }
 
-void shutdown_logger() { spdlog::shutdown(); }
+void shutdown_logger() {
+  spdlog::shutdown();
+  // d282/d443：shutdown 后 main 栈上的 AirPlay 对象析构仍会写日志，而默认日志器已被
+  // 置空 ⇒ nullptr->log() 读 0x40 崩溃并落 dump。装 null_sink 兜底，迟到日志静默丢弃。
+  auto fallback =
+      std::make_shared<spdlog::logger>("null", std::make_shared<spdlog::sinks::null_sink_mt>());
+  spdlog::set_default_logger(fallback);
+}
 
 }  // namespace fr

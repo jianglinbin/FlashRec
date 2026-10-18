@@ -1,6 +1,6 @@
 #include "player/mpv_bridge.h"
 
-#include "cast/cast_contract.h"  // d269：kLoopbackUriPrefix（回流 URI 不进 last_uri_）
+#include "cast/cast_contract.h"  // cast 合同常量（本文件现仅注释引用；保留防漂移）
 
 #include <cstdio>
 #include <cstdlib>
@@ -402,9 +402,17 @@ void MpvBridge::load_uri(const std::string& uri, double start_sec,
                          const std::string& load_format) {  if (!mpv_) return;
   // d184：每次加载应用视频填充（cover=1/contain=0；等价 CSS object-fit）
   mpv_set_property(mpv_, "panscan", MPV_FORMAT_DOUBLE, &panscan_);
+  // ★d425：keepaspect 与 panscan 同为跨 loadfile 持久的属性 —— 拉伸档若只在切换时
+  //   设置一次，下个会话（乃至同会话的重载）都会残留变形，故每次加载随 panscan 重申
+  //  （d350/d422 的 zoom 残留同款教训）。
+  {
+    int ka = keep_aspect_ ? 1 : 0;
+    mpv_set_property(mpv_, "keepaspect", MPV_FORMAT_FLAG, &ka);
+  }
   // d350：画面缩放是会话级状态——新会话（任何协议的 SetURI）重置回 100%/零平移，
   // 防止上一会话的 video-zoom/pan 残留到新投屏（main 侧经快照边沿同步重置）。
-  video_zoom_ = 1.0;
+  // ★d422：0 = 100%（2^z 标度；旧值 1.0 是 d351 前线性映射的残留 = 200%）。
+  video_zoom_ = 0.0;
   video_pan_x_ = 0.0;
   video_pan_y_ = 0.0;
   mpv_set_property(mpv_, "video-zoom", MPV_FORMAT_DOUBLE, &video_zoom_);
@@ -495,10 +503,16 @@ void MpvBridge::load_uri(const std::string& uri, double start_sec,
   int rc = mpv_command(mpv_, args.data());
   FR_LOG_INFO("[MPV] loadfile {} start={} fmt={} rc={}", clean, start > 0 ? start : 0.0,
               load_format.c_str(), rc);
-  // d151：记住最近一次点播（已去 fragment 的净 URL），供后端降级后按位重载复用。
-  // d269：回环流 URI（tcp://127.0.0.1:）不进 last_uri_ —— 端口随会话销毁，
-  // 降级重载必然失败，且对实时流"重连到开头"语义本身不成立。
-  if (clean.rfind(fr::cast::kLoopbackUriPrefix, 0) != 0) last_uri_ = clean;
+  // d151：记住最近一次加载的净 URL（已去 fragment），供按位重载复用。
+  // ★d428：**回环流也记**（连同 load_format）。旧设计（d269）排除回环流，导致镜像
+  //   会话的按位重载（d353 解码切换 / d151 后端降级）拿到的 last_uri_ 是**上一个
+  //   点播会话的残留 URL** —— 真机实证（2026-10-18）：镜像起播正常后切解码方式，
+  //   mpv 加载上次 DLNA 的 bdstatic URL，画面声音全无；手机仍在镜像（数据面持续
+  //   生产、IDR 等待丢弃暴涨），状态机/追赶控制器却仍按回环直播会话运作。
+  //   回环 server 在 mpv 断开后「回到 accept 等重连」，重载回环 URI = mpv 重新
+  //   连接、数据面从当前前沿继续 —— 与 d312 暂停恢复跳直播前沿同一语义，成立。
+  cur_uri_ = clean;
+  cur_fmt_ = load_format;
 }
 
 bool MpvBridge::reload_after_backend_switch() {
@@ -506,21 +520,33 @@ bool MpvBridge::reload_after_backend_switch() {
   if (!needs_reload_.load(std::memory_order_acquire)) return false;
   needs_reload_.store(false, std::memory_order_release);
   if (!mpv_ || !render_ || backend_ != VideoBackend::Software) return false;
-  if (last_uri_.empty()) return false;
+  if (cur_uri_.empty()) return false;
   return reload_current_preserve_pos();
 }
 
 // v0.6.1 d352：从 reload_after_backend_switch 抽出的公共段（无门槛，调用方自判）。
+// ★d428：重载真值 = 当前流（cur_uri_/cur_fmt_），按流类型分流：
+//   点播（load_format 空）→ start=pos 精确续播（d151/d352 原语义）；
+//   回流实时流（load_format 非空，仅 AirPlay 回流会设）→ start 不带（跳直播前沿，
+//   d312 play-live-edge 同源语义：重连后从当前数据解复用；旧数据已流逝，
+//   start=pos 会 seek 到收不到的区段），且必须带 load_format —— 否则裸流探测
+//   重走字节门（d285）。
 bool MpvBridge::reload_current_preserve_pos() {
-  if (!mpv_ || last_uri_.empty()) return false;
-  // 位置/暂停态从 mpv 现取（唯一真值），不依赖主线程缓存的 snap_
-  double pos = 0.0;
-  if (mpv_get_property(mpv_, "time-pos", MPV_FORMAT_DOUBLE, &pos) < 0) pos = 0.0;
+  if (!mpv_ || cur_uri_.empty()) return false;
+  // 暂停态从 mpv 现取（唯一真值）；直播流跳前沿不需要 pos
   int paused = 0;
   bool was_paused = mpv_get_property(mpv_, "pause", MPV_FORMAT_FLAG, &paused) >= 0 && paused != 0;
 
-  FR_LOG_WARN("[MPV] 按位重载续播 pos={:.2f}s paused={}", pos, was_paused ? 1 : 0);
-  load_uri(last_uri_, pos > 0.0 ? pos : 0.0);  // start=pos 精确续播；内部记录 last_uri_ 不变
+  if (cur_fmt_.empty()) {
+    double pos = 0.0;
+    if (mpv_get_property(mpv_, "time-pos", MPV_FORMAT_DOUBLE, &pos) < 0) pos = 0.0;
+    FR_LOG_WARN("[MPV] 按位重载续播 pos={:.2f}s paused={}", pos, was_paused ? 1 : 0);
+    load_uri(cur_uri_, pos > 0.0 ? pos : 0.0);  // start=pos 精确续播；内部重记 cur_uri_ 不变
+  } else {
+    FR_LOG_WARN("[MPV] 按位重载续播（直播流，跳前沿）paused={} fmt={}", was_paused ? 1 : 0,
+                cur_fmt_);
+    load_uri(cur_uri_, -1.0, cur_fmt_);
+  }
   if (was_paused) set_pause(true);             // 暂停态一并恢复（loadfile 不重置 pause 属性）
   return true;
 }
@@ -531,7 +557,9 @@ bool MpvBridge::reload_current_preserve_pos() {
 // ② 重载会连带重置渲染属性（zoom/pan），main 侧在调用后按自身状态重放（见 main）；
 // ③ 无会话时只落属性，对后续 loadfile 生效；
 // ④ 模式表与 render_loop 子菜单条目一一对应，改一处必须改另一处。
-void MpvBridge::set_hwdec_mode(int mode) {
+// ★d432：AirPlay 镜像会话禁止走本函数的重载分支 —— 每会话仅开头 1 个 IDR，
+//   新解码器从 P 帧接入必然冻结（详见 player_controller::set_hwdec_mode）。
+void MpvBridge::apply_hwdec_mode(int mode) {
   if (!mpv_) return;
   const char* val = "auto-safe";
   const char* name = "自动(auto-safe)";
@@ -539,8 +567,13 @@ void MpvBridge::set_hwdec_mode(int mode) {
   else if (mode == 2) { val = "nvdec-copy"; name = "NVDEC(nvdec-copy)"; }
   else if (mode == 3) { val = "dxva2-copy"; name = "DXVA2(dxva2-copy)"; }
   mpv_set_property_string(mpv_, "hwdec", val);
-  FR_LOG_WARN("[MPV] 解码切换 → {}（重载当前流生效）", name);
-  if (!last_uri_.empty()) reload_current_preserve_pos();
+  FR_LOG_WARN("[MPV] hwdec → {}（仅落属性，不重载）", name);
+}
+
+void MpvBridge::set_hwdec_mode(int mode) {
+  apply_hwdec_mode(mode);
+  FR_LOG_WARN("[MPV] 解码切换（重载当前流生效）");
+  if (!cur_uri_.empty()) reload_current_preserve_pos();
 }
 
 void MpvBridge::set_pause(bool p) {
@@ -580,6 +613,17 @@ void MpvBridge::set_speed(double s) {
 void MpvBridge::set_panscan(double p) {
   panscan_ = p < 0 ? 0 : (p > 1 ? 1 : p);
   if (mpv_) mpv_set_property(mpv_, "panscan", MPV_FORMAT_DOUBLE, &panscan_);
+}
+
+// ★d425：画面填充「拉伸」档本体（FIT_MODE_PLAN.md §三.6）。mpv keepaspect=no =
+//   无视视频宽高比拉伸填满输出窗口；panscan 只能在 contain↔cover 间插值，变形填充
+//   必须靠它。属性跨 loadfile 持久 ⇒ 成员持有 + load_uri 每次重申。
+void MpvBridge::set_keep_aspect(bool keep) {
+  keep_aspect_ = keep;
+  if (mpv_) {
+    int v = keep ? 1 : 0;
+    mpv_set_property(mpv_, "keepaspect", MPV_FORMAT_FLAG, &v);
+  }
 }
 
 // v0.6.1 d350：画面缩放（渲染侧，窗口不动）。mpv `video-zoom` 是 **2 的幂指数标度**：

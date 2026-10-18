@@ -194,6 +194,15 @@ bool AirplayStream::Channel::try_accept() {
   if (peer_closed_) {
     reconn_flag_ = true;
     peer_closed_ = false;
+    // ★d431：重连抑制窗。断连窗口积下的预缓冲是「中 GOP 陈旧片」（平均单帧
+    //   ~18KB、可更大）—— accept 后先冲它就会抢在 PAT/PMT 之前占满 fresh
+    //   demuxer 的 16384B 探测窗（d430 真机 41.114 现场：probe 判死 Unknown
+    //   codec）。这里整体丢弃 + 置抑制：suppress 期间 offer 丢弃一切写出，
+    //   直到 mux 线程 clear_suppress()（其时 PSI 已发出）。
+    suppress_ = true;
+    pre_.clear();
+    pre_total_ = 0;
+    pre_pub_.store(0, std::memory_order_relaxed);
   }
   FR_LOG_INFO("{} mpv 已接入回环流（port={}）", kTag, port_);
   return true;
@@ -223,6 +232,10 @@ bool AirplayStream::Channel::offer(const uint8_t* data, size_t len) {
     enqueue_pre(data, len);
     return true;
   }
+  // ★d431：重连抑制窗 —— 重连 accept 起丢弃写出（本片也丢），直到 mux 线程
+  //   clear_suppress()。抑制窗 ≤ 一个 mux 迭代（ms 级），丢弃量 ≤ 数帧，
+  //   直播前沿语义下本就是过期数据；换取「新连接第一批字节 = PAT/PMT」。
+  if (suppress_) return true;
   // 先冲预缓冲：冲不动就**整段丢弃**。陈旧数据留着没有任何价值 —— 恢复瞬间把
   // 积压的过期帧灌进 mpv 只会把播放位置顶到更早（延迟/错位的来源）。
   if (!pre_.empty()) {
@@ -262,6 +275,12 @@ bool AirplayStream::Channel::take_reconnected() {
   const bool v = reconn_flag_;
   reconn_flag_ = false;
   return v;
+}
+
+// ★d431：解除重连抑制窗（mux 线程在发出 PSI 之前调用）。
+void AirplayStream::Channel::clear_suppress() {
+  std::lock_guard<std::mutex> lk(mu_);
+  suppress_ = false;
 }
 
 // 预缓冲插入（带上限丢最旧）—— offer 的未连接/重连窗口共用。
@@ -409,6 +428,7 @@ uint64_t AirplayStream::stamp_ns(uint64_t remote_ns) {
 
 void AirplayStream::feed_video(const uint8_t* data, size_t len, uint64_t ntp_local_ns,
                                uint64_t ntp_remote_ns, const char* session_title) {
+  if (!accepting_.load(std::memory_order_relaxed)) return;  // ★d435：接管收尾中
   // d277：时间轴改由远端钟（+本地锚点）产生；ntp_local_ns 仅在远端钟缺失时兜底。
   // 原实现 `(void)ntp_remote_ns` 直接丢弃客户端钟，而 lib 的 ntp_local_ns 本机恒 0
   // → 所有 PES PTS=0（mpv "Invalid video timestamp"）→ 无画面。
@@ -494,6 +514,7 @@ void AirplayStream::feed_video(const uint8_t* data, size_t len, uint64_t ntp_loc
 // —— 音频（lib rtp 线程）——
 void AirplayStream::feed_audio(const uint8_t* data, size_t len, uint8_t ct, uint64_t ntp_local_ns,
                                uint64_t ntp_remote_ns, const char* session_title) {
+  if (!accepting_.load(std::memory_order_relaxed)) return;  // ★d435：接管收尾中
   // d277：与 feed_video 同一换算（音频远端钟由 RTP 时间戳换算；首个 RTP sync
   //   包之前为 0 → 自动退化为到达时刻轴，后续切回远端钟轴仍同域）。
   ntp_local_ns = stamp_ns(ntp_remote_ns);
@@ -567,6 +588,10 @@ void AirplayStream::feed_audio(const uint8_t* data, size_t len, uint8_t ct, uint
   //  音频写进通道：未连接时进预缓冲，等 tick 确认后再 publish，首帧不会丢。
   if (session_ == Session::AudioOnly) {
     if (audio_ch_.open()) {
+      // ★d434：纯音频无 mux 线程，d431 重连抑制窗在此无人解除（suppress_ 只在
+      //   mux_thread_main 清）——重连一次即永久哑火。纯音频是单通道裸流，没有
+      //   「PSI 必须先于数据」的顺序约束，直接解除即可；代价仅重连首帧丢弃。
+      audio_ch_.clear_suppress();
       if (!audio_ch_.offer(payload, payload_len)) {
         st_w_fail_.fetch_add(1);  // d273
         FR_LOG_DEBUG("{} 音频管道已断，丢弃帧", kTag);
@@ -702,6 +727,49 @@ void AirplayStream::mux_thread_main() {
     axis_prev_90k = axis_now_90k;
     st_axis_90k_.store(axis_now_90k, std::memory_order_relaxed);  // d279：发布轴前沿
 
+    // ★d431：无条件解除重连抑制窗（先于 PSI 发出）。防御性：suppress 只在
+    //   try_accept 重连路径与 take_reconnected 配对置位/消费，但若出现任何
+    //   意外错配，逐迭代清零可保证通道永不因抑制窗而永久哑火。
+    audio_ch_.clear_suppress();
+    video_ch_.clear_suppress();
+
+    // ★d430：重连检测提升到循环顶部（d429 补救太晚的根因修复）。
+    //   d317/d429 把「PSI 重发 + 参数集重注入」挂在**视频分支**（取到下一枚视频帧
+    //   才执行），而镜像视频 25fps ⇒ 帧间隔 ~40ms；mpv 新 demuxer 的 16384B 探测窗
+    //   在重连后 ~5ms 内即判死（d429 真机日志：23:53:23.853 接入 → .858 probed
+    //   stream 0 failed → .886 才轮到视频分支补救，晚了 28ms）。另外两个定案：
+    //   ① accept 起到本块为止写出的字节由 ★d431 抑制窗丢弃 ⇒ 本块的 PAT/PMT 就是
+    //     新连接的第一批字节（d430 真机实证残余：单枚陈旧预缓冲帧 ~18KB 即可
+    //     抢先占满 16KB 窗，probe 判死 Unknown codec）；
+    //   ② 参数集 PES 必须在 PSI **之后**写出（fresh demuxer 对 PMT 前的未知 PID
+    //     直接丢弃），所以先 tick() 冲 PSI（resync 标志被本次 tick 消费），再喂
+    //     参数集——与 d429 的「request 后靠下一 tick 顺带」顺序相反。
+    //   ★注：AirPlay 发送端没有任何重连协议（2026-10-19 用户定案）——mpv reload
+    //     一旦判死走到 STOPPED，镜像就永久终止。故此处必须抢在探测窗判死之前。
+    if (video_ch_.take_reconnected()) {
+      wait_idr = true;
+      if (mux_) {
+        mux_->request_psi_resync();
+        mux_->tick(axis_now_90k);  // 立即冲出 PAT/PMT（resync 标志本次 tick 消费）
+        std::vector<uint8_t> vp;
+        {
+          std::lock_guard<std::mutex> lk(vparams_mu_);
+          vp = vparams_;
+        }
+        // 参数集 PES 的 PTS 用「当前单调钟 − 轴基准」，与帧 PTS 同域
+        // （f.recv_ns = mono_ns()，见入队处）。轴基准未定时退化为 0 —— 参数集
+        // PES 无画面载荷，PTS 误差对解码无害。
+        uint64_t ppts = 0;
+        if (axis_base_recv_ns != 0) {
+          const uint64_t now_ns = mono_ns();
+          if (now_ns > axis_base_recv_ns) ppts = ns_to_90k(now_ns - axis_base_recv_ns);
+        }
+        if (!vp.empty()) (void)mux_->feed_video(vp.data(), vp.size(), ppts);
+        FR_LOG_INFO("{} 重连：顶部立即重发 PSI + 参数集（{}B），视频对齐到下一 IDR", kTag,
+                    vp.size());
+      }
+    }
+
     if (!got) {
       if (mux_) mux_->tick(axis_now_90k);
       continue;
@@ -757,23 +825,10 @@ void AirplayStream::mux_thread_main() {
 
     bool ok = true;
     if (is_video) {
-      // ★d316：跳直播前沿重载（d312）后，mpv 的新解码器从 GOP 中段接入 —— 缺
-      //   参数集与 IDR ⇒ `PPS id out of range` 刷屏、core-idle 卡死（真机 22:25
-      //   现场 19801 条、5 分钟无画面）。音频不受影响照常喂。
-      // ★d317：重连接入**立即喂一枚参数集 PES**（不等 IDR）—— 探测窗（16384B）
-      //   内视频 PID 必须有内容，否则 lavf `probed stream 0 failed` ⇒ mpv 打开
-      //   直接失败（d286「首枚音频 PES 进探测窗」的视频版，22:41:56 现场）。
-      if (video_ch_.take_reconnected()) {
-        wait_idr = true;
-        std::vector<uint8_t> vp;
-        {
-          std::lock_guard<std::mutex> lk(vparams_mu_);
-          vp = vparams_;
-        }
-        if (!vp.empty())
-          (void)mux_->feed_video(vp.data(), vp.size(), pts);
-        FR_LOG_INFO("{} 重连：视频丢弃对齐到下一 IDR（参数集 {}B）", kTag, vp.size());
-      }
+      // ★d316/d317/d429 的重连处理（参数集重注入 + PSI 重发）已上移到循环顶部
+      //   （★d430，见上）—— 原地消费 take_reconnected() 必须等下一枚视频帧
+      //   （25fps ⇒ ~40ms），跑不过 mpv 的 5ms 探测判死。此处仅保留 wait_idr
+      //   的丢弃对齐逻辑（顶部置位，这里消费）。
       if (wait_idr) {
         const unsigned fl =
             annexb_scan(f.data.data(), f.data.size(), video_hevc_);

@@ -137,6 +137,8 @@ struct Theme {
     float ctxPadX = 12, ctxCheckW = 20, ctxRightPad = 16;
     float ctxItemH = 26, ctxSepH = 9, ctxPadY = 5;
     float ctxRadius = 8, ctxAnchorOffset = 2;
+    // d438：右键菜单面板与可用区边缘的最小留距（含显示器工作区边界）
+    float ctxEdgePad = 2;
     // OSD 内部几何（自 chrome.cpp 字面量提升；横向面板随 s 缩放）
     float osdIconPad = 30, osdIconHalf = 9, osdTextGap = 18, osdRightPad = 24;
     float osdIconR = 15, osdActIconR = 18, osdSpeedPad = 36;

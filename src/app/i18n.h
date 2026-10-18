@@ -37,11 +37,15 @@ enum class StrId : int {
   OsdDecodeSw,        // 解码 · 软解
   OsdDecodeNvdec,     // 解码 · NVDEC
   OsdDecodeDxva2,     // 解码 · DXVA2
+  OsdDecodePendingSuffix,  // d432：投屏中无法切换，下次生效（OSD id16–19 后缀）
   OsdLangZh,          // 语言：简体中文（id14）
   OsdLangEn,          // 语言：English（id15）
+  OsdBootOn,          // d437：开机启动 开（id20）
+  OsdBootOff,         // d437：开机启动 关（id21）
   OsdSpeedPrefix,     // 前缀："倍速 " / "Speed "（后接 format_speed）
   OsdWindowPrefix,    // 前缀："窗口 " / "Window "（后接 N%）
   OsdZoomPrefix,      // 前缀："画面 " / "Zoom "（后接 N%）
+  OsdFitPrefix,       // d426：前缀："画面模式：" / "Fit mode: "（后接 FitMode* 模式名）
 
   // —— F1 帮助面板（chrome.cpp draw_help）——
   HelpTitle,        // 快捷键（F1 关闭）
@@ -82,10 +86,19 @@ enum class StrId : int {
   CtxDecodeAuto,    // 硬解 · 自动
   CtxDecodeNvdec,   // 硬解 · NVDEC
   CtxDecodeDxva2,   // 硬解 · DXVA2
+  CtxDecodeNextCast,  // d432：（下次生效）—— AirPlay 会话挂起档后缀
   CtxWindowSize,    // 窗口大小（子菜单父条目；子条目为纯数字档位不翻译）
+  CtxVideoZoom,     // 画面缩放（子菜单父条目；子条目为纯数字档位不翻译）
+  CtxFitMode,       // d426：画面填充（子菜单父条目；子条目 = FitMode* 模式名）
   CtxLanguage,      // 语言（子菜单父条目）
   CtxStop,          // 停止
   CtxExit,          // 退出
+
+  // —— 画面填充模式名（d426；右键「画面填充」子菜单条目 + OSD kind7 共用）——
+  FitModeAuto,      // 自动
+  FitModeCover,     // 铺满
+  FitModeContain,   // 完整画面
+  FitModeStretch,   // 拉伸
 
   // —— 语言名（语言子菜单/托盘两处共用；语言名按惯例恒用本名，不随界面语言变）——
   LangZhName,       // 简体中文
@@ -94,10 +107,8 @@ enum class StrId : int {
   // —— 托盘菜单（main.cpp menu_provider；每次打开重建）——
   TrayShow,           // 显示主窗口
   TrayHide,           // 隐藏主窗口
-  TrayPlay,           // 播放
-  TrayPause,          // 暂停
-  TrayNext,           // 下一集
   TrayAlwaysTop,      // 窗口置顶
+  TrayStartOnBoot,    // d437：开机启动（勾选；真值 = 系统配置）
   TrayCastScreenFmt,  // "投到屏幕 {}（{}×{}）{}" / "Cast to screen {} ({}×{}){}"
   TrayPrimary,        // "· 主屏" / "· Primary"
   TrayReloadSkin,     // 重载皮肤

@@ -46,7 +46,11 @@ void addr_to_ip(const sockaddr_storage* ss, char* out, size_t n) {
   out[0] = '\0';
   if (!ss || ss->ss_family != AF_INET) return;
   auto* in4 = reinterpret_cast<const sockaddr_in*>(ss);
-  snprintf(out, n, "%s", inet_ntoa(in4->sin_addr));
+  // 网络序 u32 → 点分十进制（手工展开，弃用 inet_ntoa——MSVC C4996 弃用警告，
+  // 且其返回静态缓冲非线程安全；不引 inet_ntop 免平台头，DRM 层零平台宏）。
+  const unsigned a = ntohl(in4->sin_addr.s_addr);
+  snprintf(out, n, "%u.%u.%u.%u", (a >> 24) & 0xffu, (a >> 16) & 0xffu, (a >> 8) & 0xffu,
+           a & 0xffu);
 }
 
 }  // namespace

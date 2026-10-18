@@ -46,6 +46,7 @@
 // 线程前提：feed_video / feed_audio / tick 由同一数据线程串行调用（调用方保证），
 // 内部状态无锁；Sink 在该线程内同步调用（返回 false = 下游不可写，调用方收尾）。
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -77,6 +78,12 @@ class TsMuxer {
   //   到达（d278：真静音期可能几十秒不送音频，轴要靠 tick 铺满，音频永不丢）。
   //   ⇒ 「音频为基准」指的是**视频 PTS 取音频轴**，不是把tick 喂成音频轴。
   void tick(uint64_t now_90k);
+  // ★d429：请求下一轮 tick **立即重发 PAT/PMT**（不等 100ms 周期）。用途 = 回环
+  //   重连接入（mpv 按位重载/暂停恢复的新 demuxer 实例）：其探测窗仅 16384B
+  //  （d285），而周期 PSI 与重连点的间隔可达 100ms 轴时（10~20Mbps 下 125~250KB）
+  //   ⇒ 窗内无 PMT ⇒ 音频 PID 被盲探成 mp3、视频轨建不出（真机 23:48:31 实证）。
+  //   跨线程安全（数据线程消费，try_accept/解码切换路径置位）。
+  void request_psi_resync();
   // 复位内部状态（可再次 start）。
   void stop();
   // ★d289：音频轴现值（下一个要发出的音频 PTS）。调用方用它驱动 tick()。
@@ -130,6 +137,10 @@ class TsMuxer {
   //     （同 pcr_seeded_ 的做法，见 tick。）
   uint64_t last_psi_at_ = 0;
   bool psi_seeded_ = false;
+  // ★d429：PSI 立即重发请求（回环重连接入时置位，下一轮 tick 消费并清零）。
+  //   atomic：置位方可能在数据线程之外（解码切换走 mux 线程、try_accept 走数据线程），
+  //   消费方 = mux 线程 tick。
+  std::atomic<bool> psi_resync_{false};
 
   // 音频时间轴（细则②，d278 重写）：轴 = 下一个要发出的音频 PTS（90kHz），
   // 每发一帧 +980；由 tick(now_90k) 用静音帧补到实时时间。

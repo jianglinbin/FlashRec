@@ -44,6 +44,9 @@ struct Config {
   int player_volume = 100;
   bool player_muted = false;
   double player_speed = 1.0;  // d169：倍速持久化（player.speed，夹到 0.25..4.0）
+  // d425：画面填充模式（player.fit_mode，FIT_MODE_PLAN.md）——0 自动 / 1 铺满 /
+  // 2 完整画面 / 3 拉伸。与协议、皮肤无关的持久偏好，不随会话重置；坏值回 0 自动。
+  int player_fit_mode = 0;
 
   // —— airplay（v0.6.0 d267；AIRPLAY_EMBED_PLAN.md §9 共 12+1 键；FR_AIRPLAY=OFF 时读取无效）——
   bool airplay_enabled = true;        // airplay.enabled（编译开关关闭时无效）

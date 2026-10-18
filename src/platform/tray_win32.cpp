@@ -7,8 +7,14 @@
 // 关闭语义：explorer 重启（TaskbarCreated）后自动补挂图标。
 #include "platform/tray.h"
 
+// CMake 已全局 /D WIN32_LEAN_AND_MEAN /D NOMINMAX（见根 CMakeLists）；
+// 此处保留等价兜底但加卫语句，避免与命令行定义冲突产生 C4005 宏重定义警告。
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <shellapi.h>
 

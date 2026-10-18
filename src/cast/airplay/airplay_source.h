@@ -87,6 +87,8 @@ class AirplaySource {
   void reset_session(const char* why);
   bool check_watchdog(double now_mono);  // true = 本轮触发了失联收尾
   void check_snapshot();                 // mpv 侧 Stopped → 收尾 lib 侧会话
+  void teardown_stack(const char* why);  // lib 栈收尾（不碰播放侧状态；stop/接管共用）
+  void preempt_for_other_source();       // ★d435：DLNA/本地投屏接管 → 结束 AirPlay
   bool make_hw_addr(unsigned char out[6]);  // false = 回退随机本地管理地址
 
   EventBus& bus_;
@@ -102,8 +104,16 @@ class AirplaySource {
   // 心跳：lib 的 conn_feedback 在 httpd 线程写，tick 在主线程读 —— 单调秒 + 原子。
   std::atomic<double> last_feedback_at_{0.0};
   std::atomic<bool> watchdog_armed_{false};
+  // ★d435：预停期抑制「Stop 指令」上抛。raop_destroy 会触发 conn_destroy 等回调，
+  //   它们会 publish_stop；若在「被 DLNA 接管」收尾时放出去，[req] Stop 会杀掉
+  //   刚接管的 DLNA 会话。teardown_stack 置位、下次 start() 成功后解除。
+  std::atomic<bool> suppress_stop_{false};
   // 客户端名（report_client_request 拿到）：只在 lib httpd 线程写/读（M0 不跨线程）。
   std::string title_;
+  // ★d435：曾确认过「当前活动会话归 AirPlay」（快照来源 = AirPlay）。只在主线程
+  //   （check_snapshot/teardown）读写。用于区分「DLNA 接管」与「本会话 SetUri
+  //   尚未被播放侧消化」两种来源非 AirPlay 的瞬时态。
+  bool owned_ = false;
 };
 
 }  // namespace fr::cast

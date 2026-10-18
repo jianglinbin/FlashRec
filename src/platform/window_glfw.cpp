@@ -4,6 +4,7 @@
 #include <thread>   // d91
 #include <vector>   // d186：DDC/CI 物理显示器枚举
 
+#include <algorithm>  // d438：std::max/min（工作区交集）
 #include <cmath>    // d210：std::lround（DIP = 物理 / contentScale）
 
 #define GLFW_INCLUDE_NONE
@@ -144,14 +145,16 @@ LRESULT CALLBACK resize_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 #endif
 
-// 找包含屏幕点 (cx, cy) 的显示器；找不到回退主屏
+// 找包含屏幕点 (cx, cy) 的显示器；找不到回退主屏（可能为空——调用方须判空）
 GLFWmonitor* monitor_containing(int cx, int cy) {
   int n = 0;
   GLFWmonitor** mons = glfwGetMonitors(&n);
-  for (int i = 0; i < n; i++) {
+  for (int i = 0; mons && i < n; i++) {
     int mx, my;
     glfwGetMonitorPos(mons[i], &mx, &my);
+    // 休眠/热拔中的输出可能取不到视频模式；解引用空指针 = 全屏/菜单整条路径崩
     const GLFWvidmode* vm = glfwGetVideoMode(mons[i]);
+    if (!vm) continue;
     if (cx >= mx && cx < mx + vm->width && cy >= my && cy < my + vm->height) return mons[i];
   }
   return glfwGetPrimaryMonitor();
@@ -708,7 +711,8 @@ void WindowGLFW::toggle_fullscreen() {
     glfwGetWindowPos(win_, &fs_sx_, &fs_sy_);
     glfwGetWindowSize(win_, &fs_sw_, &fs_sh_);
     GLFWmonitor* mon = monitor_containing(fs_sx_ + fs_sw_ / 2, fs_sy_ + fs_sh_ / 2);
-    const GLFWvidmode* vm = glfwGetVideoMode(mon);
+    const GLFWvidmode* vm = mon ? glfwGetVideoMode(mon) : nullptr;
+    if (!vm || vm->width <= 0 || vm->height <= 0) return;  // 无可用输出：保持窗口态
     glfwSetWindowMonitor(win_, mon, 0, 0, vm->width, vm->height, vm->refreshRate);
   }
 }
@@ -782,9 +786,50 @@ void WindowGLFW::move_to_workarea_corner(int w, int h) {
   glfwGetWindowPos(win_, &wx, &wy);
   glfwGetWindowSize(win_, &ww, &wh);
   GLFWmonitor* mon = monitor_containing(wx + ww / 2, wy + wh / 2);
+  if (!mon) return;  // 无显示器（拔空了）：保持原位，不拿空指针喂 GLFW
   int ax, ay, aw, ah;
   glfwGetMonitorWorkarea(mon, &ax, &ay, &aw, &ah);
+  if (aw <= 0 || ah <= 0) return;
   glfwSetWindowPos(win_, ax + aw - w, ay + ah - h);
+}
+
+// d438：右键菜单可用区。把锚点所在的显示器工作区换算回客户区逻辑坐标再求交，
+// 菜单因此不会压到任务栏下或另一块屏的桌面区域外。
+// 换算注意：glfwGetWindowPos/GetWindowSize 与鼠标屏幕坐标同单位（Win32 = 物理、
+// Wayland = 逻辑），而 UI 逻辑坐标 = 窗口尺寸 × logical/raw 比例（dip_scale 倒数）。
+bool WindowGLFW::popup_area_ui(float anchor_x, float anchor_y, float* l, float* t, float* r,
+                               float* b) const {
+  if (!win_) return false;
+  // Wayland 不允许客户端读取/设置全局窗口位置（GetWindowPos 恒 0,0），
+  // 工作区换算无意义 → 交回调用方用整窗。
+  if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) return false;
+  if (fullscreen()) return false;  // 全屏本就没有窗口外的桌面，整窗即可
+  int wx = 0, wy = 0, ww = 0, wh = 0;
+  glfwGetWindowPos(win_, &wx, &wy);
+  glfwGetWindowSize(win_, &ww, &wh);
+  const float lw = (float)logical_width(), lh = (float)logical_height();
+  if (ww <= 0 || wh <= 0 || lw <= 0.f || lh <= 0.f) return false;
+
+  const int sx = wx + (int)std::lround(anchor_x * (float)ww / lw);
+  const int sy = wy + (int)std::lround(anchor_y * (float)wh / lh);
+  GLFWmonitor* mon = monitor_containing(sx, sy);
+  if (!mon) return false;  // 无显示器：整窗兜底（GLFW 对空 monitor 会断言）
+  int ax = 0, ay = 0, aw = 0, ah = 0;
+  glfwGetMonitorWorkarea(mon, &ax, &ay, &aw, &ah);
+  if (aw <= 0 || ah <= 0) return false;
+
+  const float kx = lw / (float)ww, ky = lh / (float)wh;
+  const float x0 = std::max(0.f, (float)(ax - wx) * kx);
+  const float y0 = std::max(0.f, (float)(ay - wy) * ky);
+  const float x1 = std::min(lw, (float)(ax + aw - wx) * kx);
+  const float y1 = std::min(lh, (float)(ay + ah - wy) * ky);
+  // 交集退化（窗口几乎整个在锚点屏工作区外）：退整窗，保证菜单至少可见可用
+  if (x1 - x0 < 32.f || y1 - y0 < 32.f) return false;
+  if (l) *l = x0;
+  if (t) *t = y0;
+  if (r) *r = x1;
+  if (b) *b = y1;
+  return true;
 }
 
 // d282：对齐 GLFWwindow* → 平台原生窗口句柄（Win32 侧 = HWND）。

@@ -69,6 +69,12 @@ class AirplayStream {
   // 停复用线程、关 socket（对端 EOF → mpv END_FILE）、清预缓冲与轴状态。幂等。
   void stop_streams(const char* why);
 
+  // ★d435：收尾/接管期间暂停 lib 回调入口（feed_*）。stop_streams 复位会话后、
+  //   raop_destroy 完成前若有在途回调，会重新建会话并投 SetUri 把刚接管的
+  //   DLNA 会话抢回去。stop()/被接管路径先暂停，start() 成功后恢复。
+  void pause_feeds() { accepting_.store(false, std::memory_order_relaxed); }
+  void resume_feeds() { accepting_.store(true, std::memory_order_relaxed); }
+
   // d273：source 侧视频解密失败计数转发（首条 WARN 由 source 打，之后静默累计）
   void notify_decrypt_drop() { st_dec_drop_.fetch_add(1); }
 
@@ -128,6 +134,12 @@ class AirplayStream {
     //   线程域，无 AppHang 风险 —— d282 铁律针对的是主线程取此锁，mux 线程本来就是
     //   offer 的调用方）。
     bool take_reconnected();
+    // ★d431：解除「重连抑制窗」。重连 accept（try_accept 的 peer_closed_ 路径）
+    //   起到本调用为止，offer() 丢弃一切写出（含预缓冲）——保证新连接写出的第一批
+    //   字节是 mux 线程紧接着发出的 PAT/PMT（fresh demuxer 的 16384B 探测窗必须以
+    //   PSI 开头，否则 probe 判死；d430 真机实证：单枚陈旧视频帧 ~18KB 即可独占窗口）。
+    //   mux 线程在消费重连标志、发出 PSI 前调用；抑制窗 ≤ 一个 mux 迭代。
+    void clear_suppress();
     bool listen_ok() const { return lfd_ >= 0; }
     bool connected() const { return conn_ >= 0; }
     // 唤醒阻塞在 send() 上的数据线程（shutdown）。★不取 mu_，任意线程可调 ——
@@ -159,6 +171,9 @@ class AirplayStream {
     //   只为与 offer 的 mu_ 一致——持锁窗口是瞬时的，无 AppHang 风险）。
     bool peer_closed_ = false;
     bool reconn_flag_ = false;
+    // ★d431：重连抑制窗（mu_ 保护）。try_accept 重连路径置位；mux 线程
+    //   clear_suppress() 解除。置位期间 offer() 直接丢弃写出。
+    bool suppress_ = false;
     // d282：conn_ 的无锁镜像 —— shutdown_conn() 必须能在**不持 mu_** 的前提下
     // 拿到 fd（写阻塞时 mu_ 正被数据线程攥着，取锁就等于一起挂）。
     std::atomic<int> conn_pub_{-1};
@@ -200,6 +215,8 @@ class AirplayStream {
 
   // M2b 复用管线
   std::unique_ptr<TsMuxer> mux_;
+  // ★d435：feed_* 入口开关（见 pause_feeds/resume_feeds）。
+  std::atomic<bool> accepting_{true};
   // d271：stop_streams 的收口锁。调用方横跨 lib 回调线程（conn_destroy/
   // conn_reset/video_reset）与主线程（source stop / snapshot stopped / dtor），
   // 两路交叠时并发 join 同一线程（UB）+ 并发 mux_.reset()（double free → 堆

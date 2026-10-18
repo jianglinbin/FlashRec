@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 # 版本号是打包的唯一来源（deb 文件名 / CPack 元数据 / .desktop）；改版本先改这里，
 # 且必须与 ledger/INDEX.md 中状态为「进行中」的版本一致。
-project(FlashRec VERSION 0.6.2 LANGUAGES C CXX)
+project(FlashRec VERSION 0.6.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -54,6 +54,7 @@ set(FR_SOURCES
   src/platform/paths.cpp
   src/platform/clipboard.cpp
   src/platform/single_instance.cpp
+  src/platform/autostart.cpp  # 开机启动（d437）：Win Run 键 / Linux XDG autostart
   src/platform/window_glfw.cpp
   src/platform/net_if.c   # 多网卡（d109）：接口枚举 / 按对端选本机 IP（也被 upnp_static 编译一份）
   third_party/nanovg/src/nanovg.c
@@ -116,7 +117,11 @@ if (FR_AIRPLAY)
 endif()
 
 if (MSVC)
-  target_compile_options(flashrec PRIVATE /utf-8 /W3 /permissive- /Zi)
+  target_compile_options(flashrec PRIVATE /utf-8 /W3 /permissive- /Zi
+      # /wd4068：第三方 pupnp 头（upnpapi.h）里有 #pragma GCC ...（GCC 专属），
+      # MSVC 逐 TU 报 C4068"未知的杂注"。third_party 只读（工程规则 8），不能改
+      # 源头；定向屏蔽此一条，不影响我们自己代码的真实警告。
+      /wd4068)
   target_compile_definitions(flashrec PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
   if (NOT FLASHREC_CONSOLE)
     # 发布版在 MSVC 上必须显式指定入口点，否则链接失败。

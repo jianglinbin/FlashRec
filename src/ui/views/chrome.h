@@ -143,8 +143,16 @@ enum class CtxAction {
   DecodeMenu, DecodeSw, DecodeAuto, DecodeNvdec, DecodeDxva2,
   // v0.6.1 d354：窗口缩放档位上限 300% → 500%（新增三档；数字键 1–7 同步扩展）。
   Zoom300, Zoom400, Zoom500,
-  // v0.6.2 d362：UI 语言二级子菜单（「语言」父条目 + 两项；勾选 = i18n::lang 镜像）。
+  // d362 引入；d421 已从右键菜单撤除（语言切换只走系统托盘勾选组）——
+  // 枚举值照 ShowInfo 先例保留不删（d438 起子菜单父条目身份直接用 CtxAction）。
   LanguageMenu, LanguageZh, LanguageEn,
+  // 右键菜单「画面缩放」二级子菜单（父条目 + 七档；缩放真值 = 画面相对窗口的
+  // mpv video-zoom，50–500%。档位与「窗口大小」子菜单同表，命名加 V 前缀区分）。
+  VideoZoomMenu, VZoom50, VZoom100, VZoom150, VZoom200, VZoom300, VZoom400, VZoom500,
+  // d426：画面填充二级子菜单（父条目 + 四档；真值 = settings.json player.fit_mode
+  // 持久偏好，默认自动。档位名走 i18n FitMode* 键；模式本体见 player_controller.h
+  // 的 FitMode 枚举，值一一对应）。
+  FitModeMenu, FitModeAuto, FitModeCover, FitModeContain, FitModeStretch,
 };
 
 struct CtxMenuItem {
@@ -156,27 +164,59 @@ struct CtxMenuItem {
   bool sub = false;             // v0.6.1 d347：有二级子菜单（右侧画 ▸；展开由调用方管理）
 };
 
+// 弹出层可用区（UI 逻辑坐标，原点左上）。由调用方按窗口/显示器工作区算好；
+// 布局函数只做纯几何，不再接触 win_w/win_h。
+struct PopupArea {
+  float l = 0, t = 0, r = 0, b = 0;
+};
+
 // 菜单几何（绘制与条目命中共用同一份，禁止两处各算）。
 // ys[] 为条目在面板内的相对 y；面板位置由弹出锚点（右键按下点）+ 越界回夹决定。
 struct CtxMenuLayout {
+  // d438：条目容量唯一真值 —— render_loop 的条目数组按它开，布局循环按它填。
+  // 满员 18（上/下一集 + 四个子菜单父条目），24 留余量；三处必须同源。
+  static constexpr int kMaxItems = 24;
   float x = 0, y = 0, w = 0, h = 0;   // 面板矩形（窗口坐标）
   float item_h = 0, sep_h = 0, pad_y = 0;
-  // v0.6.1 d346：16 → 24（缩放四档条目后满员 18，原 16 会溢出——与
-  // render_loop.cpp 的 ctx_items[24] 成对扩容，改一处必须改另一处）。
-  float ys[24] = {};
-  bool sep[24] = {};
+  float ys[kMaxItems] = {};
+  bool sep[kMaxItems] = {};
   int count = 0;
-  int item_at(float px, float py) const;  // 命中条目下标（-1 = 无，含面板外）
+  bool contains(float px, float py) const;  // 面板矩形内（半开区间，与 item_at 同口径）
+  int item_at(float px, float py) const;    // 命中条目下标（-1 = 无，含面板外）
 };
 
-// 光标处弹出（mx/my = 弹出锚点），越界回夹进窗口。vg 仅用于量条目文字宽。
-CtxMenuLayout ctx_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float win_h,
+// 光标处弹出（mx/my = 弹出锚点），越界回夹进可用区。vg 仅用于量条目文字宽。
+// 保持既有"回夹"语义（不改用户习惯），只把边界从窗口换成显示器工作区交集。
+CtxMenuLayout ctx_menu_layout(NVGcontext* vg, const Theme& t, const PopupArea& area,
                               const CtxMenuItem* items, int n, float mx, float my);
 
-// hover = 本帧悬停条目下标（调用方用 item_at 算好传入；-1 = 无）
+// d438：二级子菜单专用布局。
+//   纵向：面板顶 = parent.y + ys[parent_idx]（与父条目顶边齐平）；
+//         底部放不下只做必要上移，最后顶夹进可用区。
+//   横向：优先父面板右侧；放不下翻到左侧；两侧都放不下选空间大的一侧再回夹。
+// out_left（可空）回传是否落在父面板左侧（绘制层据此翻转 ▸ 箭头）。
+CtxMenuLayout ctx_submenu_layout(NVGcontext* vg, const Theme& t, const PopupArea& area,
+                                 const CtxMenuItem* items, int n,
+                                 const CtxMenuLayout& parent, int parent_idx,
+                                 bool* out_left);
+
+// d438：父面板与子面板之间的桥接区（间隙 + 两侧纵向包络）。
+// 子菜单开着时指针经过这里不收 —— 避免 2px 间隙/分隔线/内边距把子菜单误收起。
+bool ctx_submenu_bridge_hit(const CtxMenuLayout& parent, const CtxMenuLayout& sub,
+                            int parent_idx, float px, float py);
+
+// d438：是否二级子菜单父条目（悬停展开 / 点击保持 / 子条目构造共用，
+// 禁止各处手抄列表 —— 此前 release 分支漏掉 DecodeMenu 就是手抄漂移）。
+inline bool ctx_is_submenu_parent(CtxAction a) {
+  return a == CtxAction::DecodeMenu || a == CtxAction::WindowZoomMenu ||
+         a == CtxAction::VideoZoomMenu || a == CtxAction::FitModeMenu;
+}
+
+// hover = 本帧悬停条目下标（调用方用 item_at 算好传入；-1 = 无）。
+// sub_left_idx = 子菜单已翻到父面板左侧时，该父条目下标（箭头改画 ◂）；-1 = 不翻。
 void draw_ctx_menu(NVGcontext* vg, const Theme& t, const CtxMenuLayout& lay,
                    const CtxMenuItem* items, int n, int hover,
-                   const DmgRect* clip = nullptr);
+                   const DmgRect* clip = nullptr, int sub_left_idx = -1);
 
 // —— v0.6.1 d350：F1 帮助面板（全屏遮罩 + 居中卡片，快捷键两列清单）——
 // 纯展示；点击关闭由调用方处理（render_loop 拦弹起 → ToggleHelp 意图）。

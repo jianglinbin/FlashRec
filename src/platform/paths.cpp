@@ -12,8 +12,13 @@ namespace fs = std::filesystem;
 static std::vector<std::string> g_assets;  // assets 搜索目录
 
 #ifdef _WIN32
+// CMake 已全局 /D 这两个宏；加卫语句避免 C4005 宏重定义警告（tray_win32 同款）。
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 
 static std::string exe_dir() {

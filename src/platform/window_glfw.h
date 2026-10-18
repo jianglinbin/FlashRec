@@ -70,7 +70,8 @@ class WindowGLFW {
   // —— 统一窗口拖拽（d39：全平台一致，纯 GLFW API，无 OS 模态循环）——
   // 窗口边缘/角落命中（客户区坐标）。返回 None = 非边缘带。
   // 几何：直边 6px 带；贴角 18px 正方形（四角优先，角内部无死区）。
-  // 调用方自行排除全屏/最大化/画中画。Move 由调用方按顶栏命中自行决定。
+  // 调用方自行排除全屏；最大化与画中画是否放行由调用方按形态决定
+  //（d442：画中画小窗同样允许拖边缩放）。Move 由调用方按顶栏命中自行决定。
   enum class WinEdge { None, N, S, E, W, NE, NW, SE, SW };
   static WinEdge hit_window_edge(int client_w, int client_h, float mx, float my);
   // 按边缘带切换光标（GLFW 标准形状；None = 恢复默认箭头）。拖拽进行中不调用。
@@ -105,6 +106,12 @@ class WindowGLFW {
   void set_pos(int x, int y);
   void pos_size(int* x, int* y, int* w, int* h) const;   // 窗口坐标/尺寸（屏幕坐标）
   void move_to_workarea_corner(int w, int h);            // 工作区（避开任务栏）右下角
+  // d438：右键菜单弹出可用区（客户区 UI 逻辑坐标）。
+  // 窗口态 = 客户区 ∩ 锚点所在显示器工作区；全屏 = 整窗（调用方默认值即可）；
+  // Wayland（无全局窗口坐标）/查询失败/交集退化 → false（调用方退整窗）。
+  // anchor 为鼠标在客户区内的 UI 逻辑坐标。仅主线程可调。
+  bool popup_area_ui(float anchor_x, float anchor_y, float* l, float* t, float* r,
+                     float* b) const;
 
   // 每帧坐标
   int width() const;    // framebuffer 物理像素（FBO/GL scissor 用）
