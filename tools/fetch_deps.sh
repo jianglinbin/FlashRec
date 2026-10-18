@@ -131,12 +131,16 @@ fi
 # Linux 用系统 libmpv（apt libmpv-dev），此处跳过，避免无谓的 FAIL 噪音。
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
-    if [ -n "$PY" ]; then
-      if "$PY" tools/fetch_mpv.py >>"$LOG" 2>&1; then
-        echo "[ok] mpv-dev" | tee -a "$LOG"
-      else
-        echo "[FAIL] mpv-dev，日志尾部：" | tee -a "$LOG"; tail -25 "$LOG"
-      fi
+    if [ -z "$PY" ]; then
+      echo "[FAIL] 找不到 python，无法下载 mpv-dev（可设 FR_PYTHON）" | tee -a "$LOG"
+      exit 1
+    fi
+    if "$PY" tools/fetch_mpv.py >>"$LOG" 2>&1; then
+      echo "[ok] mpv-dev" | tee -a "$LOG"
+    else
+      # mpv 是硬依赖：这里失败必须让 CI 停在本步，不能拖到 CMake 配置才暴露。
+      echo "[FAIL] mpv-dev，日志尾部：" | tee -a "$LOG"; tail -25 "$LOG"
+      exit 1
     fi
     ;;
   *) echo "[skip] mpv-dev（非 Windows，用系统 libmpv）" | tee -a "$LOG" ;;

@@ -1,4 +1,4 @@
-"""下载 mpv-dev（libmpv 预编译开发包）并解压到 third_party/mpv/。
+r"""下载 mpv-dev（libmpv 预编译开发包）并解压到 third_party/mpv/。
 
 ★ 版本钉死（2026-09-17 起）：**不再取滚动 latest**。
    zhongfly/mpv-winbuild 每天重发，取 latest 会在无人察觉的情况下换掉 libmpv
@@ -7,12 +7,14 @@
      FR_MPV_TAG=2026-09-16-0b7ed670f7 FR_MPV_ASSET=... python tools/fetch_mpv.py
    并用 tests/ + %TEMP%\flashrec_diag\pix_probe.py 的像素回读验收新版本真能出画面。
 
-7z 用系统自带 bsdtar（C:/Windows/system32/tar.exe）解压。
+7z 优先用 7-Zip（GitHub runner 预装）；系统 bsdtar 对部分 LZMA 7z 会报
+"LZMA codec is unsupported"，作为兜底。
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -31,8 +33,9 @@ DEST = ROOT / "third_party" / "mpv"
 TAR = r"C:\Windows\system32\tar.exe"
 
 # —— 钉住的版本（唯一真值；改这里等于升级 libmpv）——
-TAG = "2026-09-14-0b7ed670f7"
-ASSET = "mpv-dev-x86_64-20260914-git-0b7ed670f7.7z"
+# 上游只保留最近几个滚动 release，钉住的日常构建会被清理 ⇒ 404 时按提示换最新可用版本。
+TAG = "2026-10-18-6a262d11f6"
+ASSET = "mpv-dev-x86_64-20261018-git-6a262d11f6.7z"
 
 URL_TMPL = "https://github.com/zhongfly/mpv-winbuild/releases/download/{tag}/{asset}"
 
@@ -79,7 +82,16 @@ def main() -> int:
         return 1
 
     print("[extract] ->", DEST)
-    subprocess.run([TAR, "-xf", str(arch), "-C", str(DEST)], check=True)
+    seven = next((p for p in (
+        shutil.which("7z"), shutil.which("7za"), shutil.which("7zr"),
+        r"C:\Program Files\7-Zip\7z.exe", r"C:\Program Files (x86)\7-Zip\7z.exe",
+    ) if p and Path(p).is_file()), None)
+    cmd = ([seven, "x", "-y", f"-o{DEST}", str(arch)] if seven
+           else [TAR, "-xf", str(arch), "-C", str(DEST)])
+    proc = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+    if proc.returncode != 0:
+        print(f"[err] 解压失败（{cmd[0]}，exit={proc.returncode}）：\n{proc.stderr.strip()}")
+        return 1
     done.write_text(stamp, encoding="utf-8")
     arch.unlink(missing_ok=True)
     print("[ok] mpv-dev 就绪")
