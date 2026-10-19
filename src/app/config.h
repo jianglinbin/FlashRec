@@ -16,6 +16,39 @@ struct MonitorMemory {
   long long last_used = 0;     // 单调秒
 };
 
+// v0.6.4 d448：自动更新代理候选项（settings.json: update.proxies[]）。
+// prefix / url_template 二选一；直连与所有 enabled 代理同轮赛跑，无优先位（d452）。
+struct UpdateProxy {
+  std::string name;
+  std::string prefix;        // 拼在完整 GitHub URL 前，如 https://gh-proxy.com/
+  std::string url_template;  // 含 {url} 占位，如 https://moeyy.cn/gh-proxy/?url={url}
+  bool enabled = true;
+};
+
+struct UpdateProbe {
+  int timeout_ms = 4000;   // 单端点完整响应体下载超时
+  int concurrency = 4;     // 同时探测端点数（上限 8）
+  int cache_sec = 600;     // 自动检查复用测速结果的时长；手动检查强制重测
+};
+
+// v0.6.4：自动更新配置（update 组）。检查节奏 = 启动后一次 + 每
+// check_interval_hours 小时一次（d454）；网络/哈希/写盘全部在独立工作线程。
+struct UpdateConfig {
+  bool enabled = true;
+  bool auto_check = true;
+  int check_interval_hours = 4;
+  int startup_delay_sec = 30;
+  bool auto_download = true;
+  std::string skipped_version;
+  long long last_check_at = 0;
+  long long next_retry_at = 0;
+  int fail_count = 0;
+  bool direct_enabled = true;
+  std::string api_base;  // 空 = 官方 api.github.com；高级选项，自建镜像
+  UpdateProbe probe;
+  std::vector<UpdateProxy> proxies;
+};
+
 struct Config {
   // log
   std::string log_level = "info";
@@ -47,6 +80,9 @@ struct Config {
   // d425：画面填充模式（player.fit_mode，FIT_MODE_PLAN.md）——0 自动 / 1 铺满 /
   // 2 完整画面 / 3 拉伸。与协议、皮肤无关的持久偏好，不随会话重置；坏值回 0 自动。
   int player_fit_mode = 0;
+
+  // v0.6.4 d448–d454：自动更新（update 组）
+  UpdateConfig update;
 
   // —— airplay（v0.6.0 d267；AIRPLAY_EMBED_PLAN.md §9 共 12+1 键；FR_AIRPLAY=OFF 时读取无效）——
   bool airplay_enabled = true;        // airplay.enabled（编译开关关闭时无效）

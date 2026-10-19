@@ -66,6 +66,7 @@ std::string system_ui_language() {
 #else
 #include <unistd.h>
 #include <limits.h>
+#include <sys/statvfs.h>
 
 static std::string exe_dir() {
   char buf[PATH_MAX] = {0};
@@ -111,15 +112,43 @@ std::string system_ui_language() {
 std::string log_dir() { return app_data_dir() + "/logs"; }
 std::string config_file() { return app_data_dir() + "/settings.json"; }
 
+std::string update_cache_dir() {
+#ifdef _WIN32
+  char* env = nullptr;
+  size_t len = 0;
+  _dupenv_s(&env, &len, "LOCALAPPDATA");
+  const bool has_local = env != nullptr && env[0] != '\0';
+  std::string base = has_local ? std::string(env) : app_data_dir();
+  free(env);
+  std::replace(base.begin(), base.end(), '\\', '/');
+  return has_local ? base + "/FlashRec/updates" : base + "/updates";
+#else
+  const char* cache = getenv("XDG_CACHE_HOME");
+  if (cache && *cache) return std::string(cache) + "/FlashRec/updates";
+  const char* home = getenv("HOME");
+  return std::string(home && *home ? home : ".") + "/.cache/FlashRec/updates";
+#endif
+}
+
+long long free_disk_bytes(const std::string& path) {
+#ifdef _WIN32
+  ULARGE_INTEGER free_bytes;
+  if (!GetDiskFreeSpaceExA(path.c_str(), &free_bytes, nullptr, nullptr)) return -1;
+  return static_cast<long long>(free_bytes.QuadPart);
+#else
+  struct statvfs st {};
+  if (statvfs(path.c_str(), &st) != 0) return -1;
+  return static_cast<long long>(st.f_bavail) * static_cast<long long>(st.f_frsize);
+#endif
+}
+
 void set_env(const std::string& name, const std::string& value) {
 #ifdef _WIN32
   _putenv_s(name.c_str(), value.c_str());
 #else
   setenv(name.c_str(), value.c_str(), 1);
 #endif
-}
-
-void init() {
+}void init() {
   g_assets.clear();
   std::string ed = exe_dir();
   std::replace(ed.begin(), ed.end(), '\\', '/');

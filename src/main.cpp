@@ -50,12 +50,15 @@
 #include "platform/crash_dump.h"
 #include "platform/single_instance.h"
 #include "platform/tray.h"
+#include "platform/update_install.h"
 #include "platform/window_glfw.h"
 #include "player/player_controller.h"
 #include "player/thumb_preview.h"
 #include "player/url_probe.h"
+#include "update/update_service.h"
 #include "ui/theme.h"
 #include "ui/theme_compare.h"  // d180：逐字段自检（M1）
+#include "ui/views/update_dialog.h"  // v0.6.4 d460：弹窗按钮语义（键盘 Enter 主操作用）
 
 using namespace fr;
 
@@ -366,6 +369,10 @@ int main(int argc, char** argv) {
     shutdown_logger();
     return 1;
   }
+  // v0.6.4 d459：自动更新服务 —— 唯一工作线程，启动后 startup_delay_sec 首查、
+  // 此后每 check_interval_hours 一次；网络/哈希/写盘全在该线程，主线程只取快照。
+  fr::update::UpdateService updater;
+  updater.start(cfg.update, FLASHREC_VERSION, paths::config_file());
   // d83：托盘模式下启动即隐窗。先隐再跑 mpv/DMR 初始化（全程不闪现）；
   // 若托盘装载失败，后面恢复显示。渲染循环对隐藏窗口照常工作。
   // d91：全部显隐一律走 window.hide_window()/show_window() 包装 —— 它们负责
@@ -710,6 +717,214 @@ int main(int argc, char** argv) {
     render.wake();
   };
 
+  // —— v0.6.4 d460：自动更新弹窗（主线程是唯一策略层；渲染线程只读 in.update）——
+  // 快照 O(1) 复制；网络/哈希/写盘全在 UpdateService 工作线程。这里只做四件事：
+  //   1) 快照 → 展示字段映射；2) Ready 何时自动弹（窗口可见、非全屏/画中画/投屏中）；
+  //   3) 手动检查的「检查中」即时反馈与结果卡自动收起；4) 按钮/键盘意图 → 服务与平台动作。
+  UpdateUi update_ui{};
+  fr::update::UpdateSnapshot upd_snap{};  // 最近一次快照（按钮语义/资产路径取值）
+  bool upd_manual_wait = false;           // 手动检查进行中（45s 预算由服务保证）
+  bool upd_sticky_error = false;          // 安装器启动失败/手动检查超时：错误卡保持到用户处理
+  long long upd_manual_seq = -1;          // 发起手动检查时的 check_seq 基线
+  double upd_manual_at = 0;               // 手动检查发起时刻（超时兜底）
+  double upd_result_at = -1;              // 手动 UpToDate/Skipped 结果卡起始（5s 自动收）
+  const platform::InstallShape upd_shape = platform::detect_install_shape();
+  FR_LOG_INFO("[UPD] 运行形态 = {}", platform::install_shape_name(upd_shape));
+
+  auto upd_copy = [](char* dst, size_t cap, const char* src) {
+    if (dst == nullptr || cap == 0) return;
+    if (src == nullptr) {
+      dst[0] = '\0';
+      return;
+    }
+    std::snprintf(dst, cap, "%s", src);
+  };
+  auto upd_size_text = [](long long bytes) -> std::string {
+    char b[24];
+    const double v = (double)std::max<long long>(0, bytes);
+    if (bytes >= (1LL << 30))
+      std::snprintf(b, sizeof(b), "%.1f GB", v / (double)(1LL << 30));
+    else if (bytes >= (1LL << 20))
+      std::snprintf(b, sizeof(b), "%.1f MB", v / (double)(1LL << 20));
+    else if (bytes >= (1LL << 10))
+      std::snprintf(b, sizeof(b), "%.0f KB", v / (double)(1LL << 10));
+    else
+      std::snprintf(b, sizeof(b), "%.0f B", v);
+    return b;
+  };
+  auto upd_error_text = [](fr::update::UpdateError e) {
+    i18n::StrId id = i18n::StrId::UpdErrUnknown;
+    switch (e) {
+      case fr::update::UpdateError::Network: id = i18n::StrId::UpdErrNetwork; break;
+      case fr::update::UpdateError::Verify: id = i18n::StrId::UpdErrVerify; break;
+      case fr::update::UpdateError::Disk: id = i18n::StrId::UpdErrDisk; break;
+      case fr::update::UpdateError::Permission: id = i18n::StrId::UpdErrPermission; break;
+      case fr::update::UpdateError::Install: id = i18n::StrId::UpdErrInstall; break;
+      case fr::update::UpdateError::Unknown: id = i18n::StrId::UpdErrUnknown; break;
+      case fr::update::UpdateError::None: break;
+    }
+    return i18n::trf(i18n::StrId::UpdDlgErrorFmt, {tr(id)});
+  };
+  auto update_apply = [&](const fr::update::UpdateSnapshot& us, bool cast_active) {
+    UpdateUi& u = update_ui;
+    u.asset = upd_shape;
+    u.cast_active = cast_active;
+    u.download_available = us.download_available;
+    u.can_retry = false;
+    u.progress = -1.f;
+    u.size[0] = '\0';
+    u.error[0] = '\0';
+    if (!cast_active) u.confirm_install = false;
+    UpdateStage st = UpdateStage::Hidden;
+    if (upd_manual_wait) {
+      st = UpdateStage::Checking;
+    } else {
+      switch (us.state) {
+        case fr::update::UpdateState::Idle: st = UpdateStage::Hidden; break;
+        case fr::update::UpdateState::Checking: st = UpdateStage::Checking; break;
+        case fr::update::UpdateState::UpToDate: st = UpdateStage::UpToDate; break;
+        case fr::update::UpdateState::Downloading: st = UpdateStage::Downloading; break;
+        case fr::update::UpdateState::Ready: st = UpdateStage::Ready; break;
+        case fr::update::UpdateState::ManualOnly: st = UpdateStage::ManualOnly; break;
+        case fr::update::UpdateState::Backoff: st = UpdateStage::Failed; break;
+        case fr::update::UpdateState::Skipped: st = UpdateStage::Skipped; break;
+        case fr::update::UpdateState::Installing: st = UpdateStage::Installing; break;
+      }
+    }
+    if (st == UpdateStage::Downloading && us.progress_percent >= 0)
+      u.progress = std::clamp((float)us.progress_percent / 100.f, 0.f, 1.f);
+    if ((st == UpdateStage::Ready ||
+         (st == UpdateStage::ManualOnly && us.download_available)) &&
+        us.asset_size > 0)
+      upd_copy(u.size, sizeof(u.size), upd_size_text(us.asset_size).c_str());
+    if (st == UpdateStage::Failed && us.state == fr::update::UpdateState::Backoff) {
+      u.can_retry = true;
+      upd_copy(u.error, sizeof(u.error), upd_error_text(us.error).c_str());
+    }
+    upd_copy(u.version, sizeof(u.version), us.latest_version);
+    upd_copy(u.current, sizeof(u.current), us.current_version);
+    upd_copy(u.notes, sizeof(u.notes), us.notes);
+    if (st != UpdateStage::Ready) u.confirm_install = false;
+    u.stage = st;
+    if (st == UpdateStage::Hidden && u.prompt) u.prompt = false;
+  };
+  auto update_sync_input = [&] { in.update = update_ui; };
+  auto update_open_dialog = [&] {
+    update_ui.prompt = true;
+    update_ui.confirm_install = false;
+    upd_result_at = -1;
+    // 主线程的帮助镜像与渲染侧浮层栈同步收起（渲染侧看到 prompt 也会再兜底一次）
+    if (help_open) {
+      help_open = false;
+      render.set_help(false);
+    }
+    update_sync_input();
+    publish_wake();
+  };
+  auto update_close_dialog = [&] {
+    update_ui.prompt = false;
+    update_ui.confirm_install = false;
+    upd_result_at = -1;
+    update_sync_input();
+    publish_wake();
+  };
+  auto update_primary_intent = [&]() -> UiIntent::Kind {
+    const UpdateButtons b = update_dialog_buttons(update_ui);
+    if (b.count <= 0) return UiIntent::Kind::UpdateLater;
+    switch (b.kinds[b.count - 1]) {
+      case UpdateButtonKind::Install:
+      case UpdateButtonKind::InstallRestart: return UiIntent::Kind::UpdateInstall;
+      case UpdateButtonKind::Download: return UiIntent::Kind::UpdateDownload;
+      case UpdateButtonKind::Retry: return UiIntent::Kind::UpdateRetry;
+      case UpdateButtonKind::OpenFolder:
+      case UpdateButtonKind::OpenFolderDeb: return UiIntent::Kind::UpdateOpenFolder;
+      case UpdateButtonKind::OpenPage: return UiIntent::Kind::UpdateOpenPage;
+      default: return UiIntent::Kind::UpdateLater;  // Later / Close / None
+    }
+  };
+  auto update_start_manual_check = [&] {
+    upd_snap = updater.snapshot();
+    upd_sticky_error = false;
+    const auto st = upd_snap.state;
+    if (st == fr::update::UpdateState::Downloading || st == fr::update::UpdateState::Ready ||
+        st == fr::update::UpdateState::Installing) {
+      // 已有下载/待安装：手动入口只负责把当前状态呈现出来，不发起重复检查
+      ensure_window_shown(window);
+      update_apply(upd_snap, bus.snapshot().has_session);
+      update_open_dialog();
+      return;
+    }
+    upd_manual_wait = true;
+    upd_manual_seq = upd_snap.check_seq;
+    upd_manual_at = mono_now();
+    upd_result_at = -1;
+    updater.request_check(true);
+    ensure_window_shown(window);  // 托盘/隐藏态主动检查：先显窗再弹
+    update_ui.stage = UpdateStage::Checking;
+    update_ui.can_retry = false;
+    update_ui.error[0] = '\0';
+    update_ui.confirm_install = false;
+    update_open_dialog();
+    FR_LOG_INFO("[UPD] 手动检查（基线 check_seq={}）", upd_manual_seq);
+  };
+  auto update_begin_download = [&] {
+    upd_sticky_error = false;
+    updater.request_download();
+    update_ui.stage = UpdateStage::Downloading;
+    update_ui.progress = 0.f;
+    update_ui.confirm_install = false;
+    update_sync_input();
+    publish_wake();
+    FR_LOG_INFO("[UPD] 用户确认下载安装包");
+  };
+  auto update_install_now = [&] {
+    if (update_ui.stage != UpdateStage::Ready) return;
+    if (upd_snap.asset_path[0] == '\0') {
+      FR_LOG_WARN("[UPD] 安装包路径为空，改为打开发布页");
+      if (upd_snap.release_url[0] != '\0') platform::open_url(upd_snap.release_url);
+      return;
+    }
+    // 便携 ZIP / deb / 开发树没有可自接力的安装器：只呈现 Ready 弹窗（打开文件夹/发布页），
+    // 绝不能让 launch_update_installer 的"打开目录成功"被当成安装成功而退出主程序。
+    const bool self_install = upd_shape == platform::InstallShape::WindowsSetup ||
+                              upd_shape == platform::InstallShape::LinuxAppImage;
+    if (!self_install) {
+      FR_LOG_INFO("[UPD] 形态 {} 无自安装交接，打开 Ready 弹窗",
+                  platform::install_shape_name(upd_shape));
+      update_open_dialog();
+      return;
+    }
+    // 投屏中安装：顶栏按钮第一下只打开警告弹窗并切「仍要安装」，第二下才真正交接（计划 §9.2）
+    if (update_ui.cast_active && !update_ui.confirm_install) {
+      update_open_dialog();  // 先开弹窗（会重置 confirm），再置二次确认
+      update_ui.confirm_install = true;
+      update_sync_input();
+      publish_wake();
+      FR_LOG_INFO("[UPD] 投屏中安装 → 等待用户二次确认");
+      return;
+    }
+    update_ui.stage = UpdateStage::Installing;
+    update_ui.can_retry = false;
+    update_ui.confirm_install = false;
+    update_sync_input();
+    publish_wake();
+    FR_LOG_INFO("[UPD] 启动安装/交接：shape={} path={}", platform::install_shape_name(upd_shape),
+                upd_snap.asset_path);
+    if (platform::launch_update_installer(upd_shape, upd_snap.asset_path)) {
+      FR_LOG_INFO("[UPD] 安装器已启动，退出应用");
+      glfwSetWindowShouldClose(window.raw(), GLFW_TRUE);
+    } else {
+      upd_sticky_error = true;
+      update_ui.stage = UpdateStage::Failed;
+      update_ui.can_retry = true;
+      upd_copy(update_ui.error, sizeof(update_ui.error),
+               upd_error_text(fr::update::UpdateError::Install).c_str());
+      update_sync_input();
+      publish_wake();
+      FR_LOG_WARN("[UPD] 安装器启动失败：{}", upd_snap.asset_path);
+    }
+  };
+
   window.on_mouse_move = [&](double xp, double yp) {
     // d210：把 GLFW 光标换算到 UI 的 DIP 坐标。换算系数随平台不同（见 WindowGLFW::dip_scale）：
     // Windows 光标是物理像素、需 /scale；Wayland 光标已是逻辑坐标、系数=1。命中/悬停/阈值随之对齐。
@@ -729,6 +944,27 @@ int main(int argc, char** argv) {
         in.gx = (float)xp;
         in.gy = (float)yp;
       }
+    }
+    // v0.6.4 d460：更新弹窗模态 —— 只更新指针位置；拖拽/平移/边缘光标全部让位。
+    // 弹窗打开可能撞上进行中的拖拽（自动弹出），这里先复位主线程侧的拖拽状态。
+    if (in.update.prompt) {
+      if (pan_drag) {
+        pan_drag = false;
+        render.set_pan_drag(false);
+      }
+      if (win_move_drag) {
+        win_move_drag = false;
+        win_move_system = false;
+      }
+      if (win_resize_drag) {
+        win_resize_drag = false;
+        resize_edge = WindowGLFW::WinEdge::None;
+        window.set_resizing(false);
+      }
+      pip_pressed = false;
+      window.update_cursor_for_edge(WindowGLFW::WinEdge::None);
+      publish_only();
+      return;
     }
     // —— v0.6.1 d350：Ctrl+左键拖拽 = 平移画面（手抓画面 1:1 跟手）——
     // pan 单位 = viewport 宽高比（mpv video-pan-x|y）；除 zoom 使放大 N 倍时
@@ -833,6 +1069,13 @@ int main(int argc, char** argv) {
   };
   window.on_mouse_btn = [&](int button, int action, int mods) {
     publish_only();           // d36：点击不唤醒面板（动作反馈走 OSD；热区悬停本身已亮面板）
+    // v0.6.4 d460：更新弹窗模态 —— 只有左键的按下/抬起进入渲染侧弹窗按钮状态机，
+    // 右键/中键/侧键一律不产生任何意图（弹窗独占输入）。
+    if (in.update.prompt) {
+      if (button == GLFW_MOUSE_BUTTON_LEFT) in.down = action == GLFW_PRESS;
+      publish_wake();
+      return;
+    }
     if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
       // v0.6.1 d356：Ctrl+中键 = 画面缩放复位 100%（post 意图经 exec_intent 消费；
       // 不置 down_middle，避免同时触发中键静音）。无修饰中键 = 静音（渲染线程）。
@@ -1204,6 +1447,18 @@ int main(int argc, char** argv) {
     publish_wake();
   };
   window.on_key = [&](int key, int action, int mods) {
+    // v0.6.4 d460：更新弹窗模态 —— Esc = 稍后，Enter = 主操作，其余快捷键不响应。
+    // 只吃按下沿（REPEAT 不重复投递），抬起一律吞掉，避免穿透到进度控制。
+    if (in.update.prompt) {
+      if (action == GLFW_PRESS) {
+        if (key == GLFW_KEY_ESCAPE)
+          channel.post_intent(UiIntent{UiIntent::Kind::UpdateLater});
+        else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER)
+          channel.post_intent(UiIntent{update_primary_intent()});
+      }
+      publish_only();
+      return;
+    }
     // —— 左右键抬起：键盘拖动结束，此刻才真正 seek（d29 问题 1）——
     if (action == GLFW_RELEASE) {
       if (kb_progress && (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT)) {
@@ -1316,6 +1571,11 @@ int main(int argc, char** argv) {
   // 与 Ctrl+↑↓ 同粒度；d352：步进改 10%）；无修饰键 = 音量（原行为）。mods 由
   // window_glfw 的 scroll 回调用 glfwGetKey 现查（d346）。
   window.on_scroll = [&](double, double y, int mods) {
+    // v0.6.4 d460：更新弹窗模态 —— 滚轮不调音量/不缩放画面
+    if (in.update.prompt) {
+      publish_only();
+      return;
+    }
     publish_only();
     if (y == 0) return;
     if (mods & GLFW_MOD_CONTROL) {
@@ -1686,6 +1946,41 @@ int main(int argc, char** argv) {
         // 行为与托盘勾选一致（apply_language 幂等），误投也无副作用。
         apply_language(it.value < 0.5 ? i18n::Lang::ZhCn : i18n::Lang::EnUs);
         break;
+      // —— v0.6.4 d460：更新弹窗按钮（渲染线程只投意图，I/O 全在主线程/工作线程）——
+      case UiIntent::Kind::UpdateInstall:
+        update_install_now();
+        break;
+      case UiIntent::Kind::UpdateDownload:
+        update_begin_download();
+        break;
+      case UiIntent::Kind::UpdateLater:
+        // 「稍后」只关闭当前弹窗；Ready 顶栏按钮仍在（不再有自动弹窗需要抑制）
+        upd_sticky_error = false;
+        update_close_dialog();
+        break;
+      case UiIntent::Kind::UpdateSkip:
+        upd_manual_wait = false;
+        upd_sticky_error = false;
+        updater.skip_current_version();
+        update_close_dialog();
+        FR_LOG_INFO("[UPD] 用户跳过 v{}", upd_snap.latest_version);
+        break;
+      case UiIntent::Kind::UpdateRetry:
+        update_start_manual_check();
+        break;
+      case UiIntent::Kind::UpdateOpenFolder:
+        if (upd_snap.asset_path[0] != '\0')
+          platform::open_containing_folder(upd_snap.asset_path);
+        // 便携 ZIP/deb：打开目录后由用户手动完成覆盖/安装（Ready 按钮保持，可再次打开）
+        update_close_dialog();
+        break;
+      case UiIntent::Kind::UpdateOpenPage:
+        if (upd_snap.release_url[0] != '\0')
+          platform::open_url(upd_snap.release_url);
+        else if (upd_snap.asset_path[0] != '\0')
+          platform::open_containing_folder(upd_snap.asset_path);
+        update_close_dialog();
+        break;
     }
     render.wake();
   };
@@ -1771,6 +2066,53 @@ int main(int argc, char** argv) {
                   boot.checked = autostart::enabled();
                   items.push_back(boot);
                 }
+                {  // v0.6.4 d459：自动更新入口。菜单每次打开实时取快照（O(1) 复制），
+                  // 检查/下载/安装中禁用，就绪显示安装入口，手动检查完短暂显示"已是最新"。
+                  const fr::update::UpdateSnapshot us = updater.snapshot();
+                  const long long now_s =
+                      std::chrono::duration_cast<std::chrono::seconds>(
+                          std::chrono::system_clock::now().time_since_epoch())
+                          .count();
+                  TrayMenuItem up;
+                  up.id = 6;
+                  up.label = tr(i18n::StrId::UpdTrayCheck);
+                  switch (us.state) {
+                    case fr::update::UpdateState::Checking:
+                      up.label = tr(i18n::StrId::UpdTrayChecking);
+                      up.enabled = false;
+                      break;
+                    case fr::update::UpdateState::Downloading:
+                      up.label = i18n::trf(
+                          i18n::StrId::UpdTrayDownloadingFmt,
+                          {std::to_string(std::max(0, us.progress_percent)).c_str()});
+                      up.enabled = false;
+                      break;
+                    case fr::update::UpdateState::Installing:
+                      up.label = tr(i18n::StrId::UpdTrayInstalling);
+                      up.enabled = false;
+                      break;
+                    case fr::update::UpdateState::Ready:
+                      up.label =
+                          i18n::trf(i18n::StrId::UpdTrayReadyFmt, {us.latest_version});
+                      break;
+                    case fr::update::UpdateState::ManualOnly:
+                      if (us.download_available) {
+                        up.label = i18n::trf(i18n::StrId::UpdTrayDownloadFmt,
+                                             {us.latest_version});
+                      }
+                      break;
+                    case fr::update::UpdateState::UpToDate:
+                      // 仅手动检查后 10s 内显示，避免常驻占用菜单项
+                      if (us.last_check_manual && us.last_check_at > 0 &&
+                          now_s - us.last_check_at <= 10) {
+                        up.label = tr(i18n::StrId::UpdTrayUpToDate);
+                      }
+                      break;
+                    default:
+                      break;
+                  }
+                  items.push_back(up);
+                }
                 items.push_back(TrayMenuItem::Sep());
                 {  // d146 R4：投屏窗口 —— 每块可用屏一项（选屏判断失手时的人工兜底硬保障）
                   MonitorInfo ms[8];
@@ -1845,6 +2187,35 @@ int main(int argc, char** argv) {
                   case 21:
                     apply_language(i18n::Lang::EnUs);
                     break;
+                  case 6: {  // v0.6.4 d459/d460：更新入口（手动检查 / 待确认下载 / 就绪）
+                    const fr::update::UpdateSnapshot us = updater.snapshot();
+                    upd_snap = us;
+                    const bool cast_active = bus.snapshot().has_session;
+                    if (us.state == fr::update::UpdateState::Ready) {
+                      // 用户主动点托盘：显窗 + 直接弹安装卡（不受「稍后」抑制）
+                      ensure_window_shown(window);
+                      upd_sticky_error = false;
+                      update_apply(us, cast_active);
+                      update_open_dialog();
+                    } else if (us.state == fr::update::UpdateState::ManualOnly &&
+                               us.download_available) {
+                      // 主动确认下载：打开弹窗展示下载进度
+                      ensure_window_shown(window);
+                      update_apply(us, cast_active);
+                      update_open_dialog();
+                      update_begin_download();
+                    } else if (us.state == fr::update::UpdateState::Checking ||
+                               us.state == fr::update::UpdateState::Downloading ||
+                               us.state == fr::update::UpdateState::Installing) {
+                      // 菜单项在这些状态本应禁用；误点也只呈现当前进度，不重复发请求
+                      ensure_window_shown(window);
+                      update_apply(us, cast_active);
+                      update_open_dialog();
+                    } else {
+                      update_start_manual_check();
+                    }
+                    break;
+                  }
                   case -1:  // 退出：统一走 on_quit_request（隐窗 + 置关闭，d117）
                     if (window.on_quit_request) window.on_quit_request();
                     break;
@@ -2081,6 +2452,39 @@ int main(int argc, char** argv) {
         snap_ver_seen = ver;
       }
     }
+    // 6.7) v0.6.4 d460：更新快照 → 弹窗（O(1) 复制；网络/哈希/写盘全在工作线程）
+    {
+      upd_snap = updater.snapshot();
+      const bool cast_active = snap.has_session;
+      // 手动检查收口：check_seq 每完成一次检查 +1（成功/失败都算）；服务预算 45s，
+      // 这里再留 5s 余量兜底（防手动请求被 30s 去重合并后无人推进）。
+      const bool manual_done = upd_manual_wait && upd_snap.check_seq != upd_manual_seq;
+      const bool manual_timeout = upd_manual_wait && now - upd_manual_at > 50.0;
+      if (manual_done || manual_timeout) {
+        upd_manual_wait = false;
+        if ((upd_snap.state == fr::update::UpdateState::UpToDate ||
+             upd_snap.state == fr::update::UpdateState::Skipped) &&
+            update_ui.prompt)
+          upd_result_at = now;  // 手动「已是最新/已跳过」结果卡 5s 后自动收
+        if (manual_timeout && upd_snap.state == fr::update::UpdateState::Checking) {
+          upd_sticky_error = true;
+          update_ui.stage = UpdateStage::Failed;
+          update_ui.can_retry = true;
+          upd_copy(update_ui.error, sizeof(update_ui.error),
+                   upd_error_text(fr::update::UpdateError::Network).c_str());
+          update_sync_input();
+          publish_wake();
+        }
+      }
+      if (!upd_sticky_error) {
+        update_apply(upd_snap, cast_active);
+        update_sync_input();  // 只写主线程缓冲；发布交给步骤 8 的按需闸门
+      }
+      // v0.6.4 d464：自动检查/下载全程静默，Ready 不再自动弹窗 —— 就绪只由顶栏
+      // 更新按钮提示（窗口隐藏/全屏时用户从托盘「安装更新 vX」主动打开弹窗）。
+      if (update_ui.prompt && upd_result_at >= 0 && now - upd_result_at >= 5.0)
+        update_close_dialog();
+    }
     // v0.6.1 d350：会话边沿 → 画面缩放/平移重置（mpv 侧 load_uri 已重置属性，
     // 这里同步 main 侧状态）。会话从无到有、或会话内 URI 变化（新投屏接管/
     // 下一集）都算新会话；暂停/恢复/进度更新不触发。
@@ -2240,6 +2644,8 @@ int main(int argc, char** argv) {
   keep_awake::set(false);
   dmr.stop();
   player.shutdown();
+  // d459：先取消更新网络/下载并 join（.part 保留），再关日志。
+  updater.stop();
   window.destroy();
   FR_LOG_INFO("[APP] 退出");
   shutdown_logger();

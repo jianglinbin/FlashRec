@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 # 版本号是打包的唯一来源（deb 文件名 / CPack 元数据 / .desktop）；改版本先改这里，
 # 且必须与 ledger/INDEX.md 中状态为「进行中」的版本一致。
-project(FlashRec VERSION 0.6.3 LANGUAGES C CXX)
+project(FlashRec VERSION 0.6.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -37,6 +37,17 @@ set(FR_SOURCES
   src/player/player_controller.cpp
   src/player/thumb_preview.cpp
   src/player/url_probe.cpp
+  # v0.6.4 自动更新核心（纯逻辑，便于单测；HTTP/服务线程后续里程碑接入）
+  src/update/http_client.cpp
+  src/update/json_lite.cpp
+  src/update/release_info.cpp
+  src/update/version.cpp
+  src/update/endpoint_policy.cpp   # d457：直连/代理候选、吞吐排名、粘滞、健康冷却
+  src/update/detector.cpp          # d457：API → 清单 → Atom 检测链
+  src/update/downloader.cpp        # d458：.part/.ready 续传下载与哈希校验
+  src/update/verify.cpp            # d458：SHA-256（自包含）
+  src/update/update_service.cpp    # d459：唯一工作线程 + 启动/4h 调度 + 快照
+  src/platform/update_install.cpp  # d459：安装形态识别（Win 注册表 / AppImage / deb）
   src/ui/framebuffer.cpp
   src/ui/nanovg_gl_impl.cpp
   src/ui/regions.cpp
@@ -45,6 +56,7 @@ set(FR_SOURCES
   src/ui/views/chrome.cpp
   src/ui/views/empty_state.cpp
   src/ui/views/player_view.cpp
+  src/ui/views/update_dialog.cpp  # d460：自动更新弹窗（模态卡片）
   src/platform/gl_lock.cpp
   src/platform/console.cpp     # d163：运行时可申请控制台（--console）+ UTF-8 代码页
   src/platform/seh_guard.cpp   # d125：SEH 兜底（渲染链接住显卡驱动异常 → 自动降级 SW）
@@ -147,6 +159,7 @@ target_link_libraries(flashrec PRIVATE
   glad
   glfw
   spdlog::spdlog_header_only
+  CURL::libcurl
   ${UPNP_LIBS}
   ${MPV_LIBRARY}
 )
@@ -157,7 +170,7 @@ endif()
 if (WIN32)
   target_link_libraries(flashrec PRIVATE
     opengl32 gdi32 shell32 comctl32 dwmapi user32 ws2_32 iphlpapi winmm dbghelp
-    dxva2)  # d186：DDC/CI 读屏电源模式（VCP 0xD6）
+    dxva2 advapi32)  # d186：DDC/CI 读屏电源模式（VCP 0xD6）；d459：更新形态读注册表
 else()
   find_package(Threads REQUIRED)
   find_package(X11 REQUIRED)                     # global_cursor 用 XQueryPointer（d39）
@@ -229,4 +242,35 @@ elseif (UNIX AND NOT APPLE)
 else()
   install(TARGETS flashrec RUNTIME DESTINATION .)
   install(DIRECTORY assets/ DESTINATION assets)
+endif()
+
+# ---- 开发期 C++ 单元测试（默认关，发布构建不产出测试二进制）----
+option(FLASHREC_BUILD_TESTS "构建 C++ 单元测试（开发期）" OFF)
+if (FLASHREC_BUILD_TESTS)
+  enable_testing()
+  add_executable(update_tests
+    tests/update_tests.cpp
+    src/app/config.cpp
+    src/update/http_client.cpp
+    src/update/json_lite.cpp
+    src/update/release_info.cpp
+    src/update/version.cpp
+    src/update/endpoint_policy.cpp
+    src/update/detector.cpp
+    src/update/downloader.cpp
+    src/update/verify.cpp
+    src/update/update_service.cpp
+    src/platform/update_install.cpp
+    src/platform/paths.cpp
+  )
+  target_include_directories(update_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(update_tests PRIVATE spdlog::spdlog_header_only CURL::libcurl)
+  if (WIN32)
+    target_link_libraries(update_tests PRIVATE advapi32)
+  endif()
+  if (MSVC)
+    target_compile_options(update_tests PRIVATE /utf-8 /W3)
+    target_compile_definitions(update_tests PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
+  endif()
+  add_test(NAME update_tests COMMAND update_tests)
 endif()

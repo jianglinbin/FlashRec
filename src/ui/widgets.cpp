@@ -503,6 +503,24 @@ void icon_skin(NVGcontext* vg, float cx, float cy, float w, NVGcolor c) {
   nvgFill(vg);
 }
 
+void icon_update(NVGcontext* vg, float cx, float cy, float w, NVGcolor c) {
+  // 下载箭头 + 托盘横线：与线性图标同族（1.3px），箭头略上移给横线留空
+  const float h = w * 0.9f;
+  nvgStrokeWidth(vg, 1.3f);
+  nvgStrokeColor(vg, c);
+  nvgBeginPath(vg);
+  nvgMoveTo(vg, cx, cy - h * 0.46f);
+  nvgLineTo(vg, cx, cy + h * 0.10f);
+  nvgMoveTo(vg, cx - w * 0.28f, cy - h * 0.14f);
+  nvgLineTo(vg, cx, cy + h * 0.10f);
+  nvgLineTo(vg, cx + w * 0.28f, cy - h * 0.14f);
+  nvgStroke(vg);
+  nvgBeginPath(vg);
+  nvgMoveTo(vg, cx - w * 0.38f, cy + h * 0.42f);
+  nvgLineTo(vg, cx + w * 0.38f, cy + h * 0.42f);
+  nvgStroke(vg);
+}
+
 void win_button(NVGcontext* vg, const Theme& t, float x, float y, float w, float h, WinBtn kind,
                 const BtnState& st, bool active, float rad, float win_w) {
   const bool close = kind == WinBtn::Close;

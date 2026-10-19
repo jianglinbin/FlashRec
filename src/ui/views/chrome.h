@@ -37,6 +37,11 @@ enum BtnId : int {
   kBtnClipPlay,     // d74：剪贴板提示条「播放」按钮（横幅隐藏时 d57 冻结值清理）
   kBtnClipIgnore,   // d74：剪贴板提示条「忽略」按钮
   kBtnSkin,         // d182：顶栏「皮肤按钮」
+  kBtnUpdateTop,    // v0.6.4 d464：顶栏「更新就绪」按钮（皮肤按钮左侧）
+  kBtnHelpTop,      // v0.6.4 d471：顶栏「帮助」按钮（右侧按钮簇最左位，? 图标）
+  kBtnUpdate0,      // v0.6.4 d460：更新弹窗三按钮（左 → 右）
+  kBtnUpdate1,
+  kBtnUpdate2,
   kBtnIdCount
 };
 
@@ -83,6 +88,30 @@ struct SkinBtnGeom {
 };
 SkinBtnGeom skin_button_geom(const Theme& t, float win_w);
 void draw_skin_button(NVGcontext* vg, const Theme& t, float w, ViewInput& in, ViewCallbacks& cb,
+                      const DmgRect* clip = nullptr);
+
+// —— v0.6.4 d464：顶栏「更新就绪」按钮（皮肤按钮左侧；仅 UpdateStage::Ready 可见）——
+// 收起 = skinBtnSize 方块；悬停底板左扩出文字「更新软件」，图标中心全程不动。
+// x/y/w/h 恒为**展开包络**（脏区/busy 归因用），收起命中由 draw 内按上一帧 hover 决定。
+struct UpdateBtnGeom {
+  float x = 0, y = 0, w = 0, h = 0;
+  float right = 0;       // 包络右缘（皮肤按钮左侧 skinBtnGap 处）
+  float base_w = 0;      // 收起方块宽
+  float pill_w = 0;      // 完全展开底板宽
+  float icon_cx = 0, icon_cy = 0;
+};
+UpdateBtnGeom update_button_geom(NVGcontext* vg, const Theme& t, float win_w);
+void draw_update_button(NVGcontext* vg, const Theme& t, float w, ViewInput& in, ViewCallbacks& cb,
+                        const DmgRect* clip = nullptr);
+
+// —— v0.6.4 d471：顶栏「帮助」按钮（右侧按钮簇最左位；复用更新按钮的 pill 形态）——
+// 收起 = ? 图标方块；悬停底板左扩出文字「帮助」。位置随更新按钮联动：
+//   更新可见 → 右缘贴更新按钮展开包络左侧（更新悬停展开时帮助平滑左移让位）；
+//   更新不可见 → 右缘顶替皮肤按钮左侧空位（即更新按钮收起时的位置）。
+// upd_hover 传当前帧 in.btns.hover[kBtnUpdateTop]（命中/绘制/归因同源）。
+UpdateBtnGeom help_button_geom(NVGcontext* vg, const Theme& t, float win_w,
+                               bool upd_visible, float upd_hover);
+void draw_help_button(NVGcontext* vg, const Theme& t, float w, ViewInput& in, ViewCallbacks& cb,
                       const DmgRect* clip = nullptr);
 
 // —— d182：皮肤弹层（绘制/命中共用同一份几何；names = 各皮肤显示名）——

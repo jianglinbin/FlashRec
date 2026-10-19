@@ -26,6 +26,7 @@ clone glfw   https://github.com/glfw/glfw.git        3.4 &
 clone nanovg https://github.com/memononen/nanovg.git "" &
 clone spdlog https://github.com/gabime/spdlog.git    v1.14.1 &
 clone pupnp  https://github.com/pupnp/pupnp.git      branch-1.14.x &
+clone curl   https://github.com/curl/curl.git        curl-8_23_0 &
 wait
 
 # ---- UxPlay（v0.6.0 AirPlay 线 / d336）：pin 57ea834 ----

@@ -9,6 +9,10 @@ namespace fr::paths {
 std::string app_data_dir();
 std::string log_dir();       // app_data_dir()/logs（SPEC §6）
 std::string config_file();   // app_data_dir()/settings.json
+// v0.6.4 自动更新下载缓存：%LOCALAPPDATA%\FlashRec\updates 或 XDG_CACHE_HOME/FlashRec/updates
+std::string update_cache_dir();
+// 路径所在卷的可用字节数；探测失败返回 -1（更新模块按“未知”放宽处理）。
+long long free_disk_bytes(const std::string& path);
 // 可执行文件旁的 assets/；开发树回退到源码根 assets/
 std::string asset_dir();
 std::string asset_file(const std::string& rel);

@@ -160,6 +160,22 @@ UiRegions compute_regions(NVGcontext* vg, const Theme& t, float w, float h,
     R.skin_btn = DmgRect{dm(sb.x), 0, dm(sb.w), dm(sb.h)};
     R.bar_btn[kBtnSkin] = R.skin_btn;
   }
+  // v0.6.4 d464：顶栏更新按钮（整条展开包络；仅在 Ready 时可交互/可见）
+  {
+    const UpdateBtnGeom ub = update_button_geom(vg, t, w);
+    R.update_btn = DmgRect{dm(ub.x), 0, dm(ub.w), dm(ub.h)};
+    R.bar_btn[kBtnUpdateTop] = R.update_btn;
+    R.update_btn_visible = in.update.stage == UpdateStage::Ready && !in.fullscreen;
+  }
+  // v0.6.4 d471：顶栏帮助按钮（右侧簇最左位；更新可见时贴其展开包络左侧，悬停随动）
+  {
+    const bool upd_vis = in.update.stage == UpdateStage::Ready;
+    const UpdateBtnGeom hb =
+        help_button_geom(vg, t, w, upd_vis, in.btns.hover[kBtnUpdateTop]);
+    R.help_btn = DmgRect{dm(hb.x), 0, dm(hb.w), dm(hb.h)};
+    R.bar_btn[kBtnHelpTop] = R.help_btn;
+    R.help_btn_visible = !in.fullscreen;
+  }
 
   // 底栏控件级热区（y 范围与 bar_hit 同式：栏身 ∩ 按钮带）
   const Geom g = geom_of(vg, t, w, h, snap, media);
@@ -222,6 +238,10 @@ UiRegions compute_regions(NVGcontext* vg, const Theme& t, float w, float h,
     if (R.prompt_visible)
       R.prompt_bar = DmgRect{dm(pl.x), dm(pl.y), dm(pl.w), dm(pl.h)};
   }
+
+  // —— v0.6.4 更新弹窗（模态卡片；画中画也允许：托盘主动点开更新时小窗内可见）——
+  // 卡片矩形由 render_loop 用 update_dialog_layout 补填；这里只给可见性门控。
+  R.update_visible = in.update.prompt;
 
   // ctx_menu / badges：render_loop 出帧路径补填（ctx_lay / 徽章文本在它手里）
   return R;

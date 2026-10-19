@@ -96,6 +96,7 @@ static int is_virtual_name(const char* name) {
   return 0;
 }
 
+#ifdef _WIN32
 static int mask_from_prefix(int prefix, char* out, size_t n) {
   if (prefix < 0 || prefix > 32) return 0;
   unsigned int m = (prefix == 0) ? 0u : (0xFFFFFFFFu << (32 - prefix));
@@ -103,6 +104,7 @@ static int mask_from_prefix(int prefix, char* out, size_t n) {
   a.s_addr = htonl(m);
   return inet_ntop(AF_INET, &a, out, (socklen_t)n) != NULL;
 }
+#endif
 
 static void add_if(const char* ip, const char* mask, const char* name, unsigned int index) {
   if (!ip || g_count >= FR_NET_IF_MAX) return;
@@ -203,7 +205,9 @@ static int scan_impl(void) {
   for (struct ifaddrs* ifa = ifap; ifa != NULL; ifa = ifa->ifa_next) {
     if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_PACKET) continue;
     const struct sockaddr_ll* sll = (const struct sockaddr_ll*)ifa->ifa_addr;
-    if (sll->sll_halen != 6 || !sll->sll_addr) continue;
+    // sll_addr 是数组成员，取址恒非空 —— 只按 sll_halen 判有效（原 `!sll->sll_addr`
+    // 恒假，gcc -Waddress 报警；数组地址判空没有意义）。
+    if (sll->sll_halen != 6) continue;
     if (npkt < FR_NET_IF_MAX) {
       pkts[npkt].name = ifa->ifa_name;
       pkts[npkt].mac = sll->sll_addr;

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 // ★包含顺序铁律：log.h（→ spdlog → os-inl.h → windows.h）必须先于 glfw3.h——
 // glfw3.h 把 APIENTRY 定义为 __stdcall 且不撤销，后到的 minwindef.h 重定义成
@@ -28,6 +29,7 @@
 #include "ui/views/chrome.h"
 #include "ui/views/empty_state.h"
 #include "ui/views/player_view.h"
+#include "ui/views/update_dialog.h"
 #include "ui/widgets.h"
 
 namespace fr {
@@ -83,6 +85,17 @@ bool input_changed(const ViewInput& a, const ViewInput& b) {
          a.osd_kind != b.osd_kind || a.osd_value != b.osd_value || a.osd_at != b.osd_at ||
          a.osd_dir != b.osd_dir ||
          a.clip_visible != b.clip_visible || a.clip_at != b.clip_at ||  // d74 提示条
+         a.update.stage != b.update.stage || a.update.prompt != b.update.prompt ||
+         a.update.asset != b.update.asset || a.update.can_retry != b.update.can_retry ||
+         a.update.download_available != b.update.download_available ||
+         a.update.cast_active != b.update.cast_active ||
+         a.update.confirm_install != b.update.confirm_install ||
+         a.update.progress != b.update.progress ||
+         std::strcmp(a.update.current, b.update.current) != 0 ||
+         std::strcmp(a.update.version, b.update.version) != 0 ||
+         std::strcmp(a.update.size, b.update.size) != 0 ||
+         std::strcmp(a.update.error, b.update.error) != 0 ||
+         std::strcmp(a.update.notes, b.update.notes) != 0 ||  // v0.6.4 更新弹窗
          a.popup_l != b.popup_l || a.popup_t != b.popup_t ||            // d438 菜单可用区
          a.popup_r != b.popup_r || a.popup_b != b.popup_b;
 }
@@ -116,6 +129,24 @@ uint32_t hover_key_of(NVGcontext* vg, const Theme& t, float w, float h,
     // d182：顶栏皮肤按钮悬停（bit 17）
     const SkinBtnGeom sb = skin_button_geom(t, w);
     if (in.mx >= sb.x && in.mx < sb.x + sb.w && in.my >= 0.f && in.my < sb.h) key |= 1u << 17;
+    // v0.6.4 d464：顶栏更新按钮（bit 18；就绪才出现，展开态整条 pill 可悬停）
+    if (in.update.stage == UpdateStage::Ready) {
+      const UpdateBtnGeom ub = update_button_geom(vg, t, w);
+      const bool expanded = in.btns.hover[kBtnUpdateTop] > 0.01f;
+      const float ux = expanded ? ub.x : ub.right - ub.base_w;
+      const float uw = expanded ? ub.w : ub.base_w;
+      if (in.mx >= ux && in.mx < ux + uw && in.my >= 0.f && in.my < ub.h) key |= 1u << 18;
+    }
+    // v0.6.4 d471：顶栏帮助按钮（bit 19；位置随更新按钮可见性/悬停联动）
+    {
+      const bool upd_vis = in.update.stage == UpdateStage::Ready;
+      const UpdateBtnGeom hb =
+          help_button_geom(vg, t, w, upd_vis, in.btns.hover[kBtnUpdateTop]);
+      const bool hexp = in.btns.hover[kBtnHelpTop] > 0.01f;
+      const float hx = hexp ? hb.x : hb.right - hb.base_w;
+      const float hw = hexp ? hb.w : hb.base_w;
+      if (in.mx >= hx && in.mx < hx + hw && in.my >= 0.f && in.my < hb.h) key |= 1u << 19;
+    }
   }
   const BarHit bh = bar_hit(vg, t, w, h, snap, in, media);
   if (bh.play) key |= 1u << 3;
@@ -476,8 +507,10 @@ void RenderLoop::frame(double now) {
   // —— d45：右键菜单状态机（必须跑在跳帧判定**之前**：按下/弹起边沿一帧都不能漏，
   //     否则"按下记位、弹起开菜单"的配对会错乱。状态切换时置 force_dirty 保证
   //     开/关的那一帧一定被画出来）——
-  // 进画中画：右键菜单 / 倍速弹层 / 皮肤弹层 / 帮助面板连带关闭
-  if (pip_mode_ && (ctx_open_ || speed_open_ || skin_open_ || help_open_)) {
+  // 进画中画 / 更新弹窗弹出：右键菜单 / 倍速弹层 / 皮肤弹层 / 帮助面板连带关闭
+  //（模态弹窗要求独占输入与浮层栈顶，面板留在下面既画不到也点不到）
+  if ((pip_mode_ || in.update.prompt) &&
+      (ctx_open_ || speed_open_ || skin_open_ || help_open_)) {
     ctx_open_ = false;
     close_ctx_sub();  // v0.6.1 d347：子菜单连带
     speed_open_ = false;
@@ -500,7 +533,7 @@ void RenderLoop::frame(double now) {
       channel_.post_intent({UiIntent::Kind::Close});  // 菜单没开 = 保持 ESC 原关窗行为
     }
   }
-  if (!pip_mode_) {
+  if (!pip_mode_ && !in.update.prompt) {
     if (in.down_right && !right_prev_) {              // 右键按下边沿
       if (ctx_open_) {                                // 菜单开着再按右键 = 关闭
         ctx_open_ = false;
@@ -525,6 +558,9 @@ void RenderLoop::frame(double now) {
       }
       ctx_right_suppress_ = false;
     }
+    right_prev_ = in.down_right;
+  } else if (in.update.prompt) {
+    // v0.6.4 模态弹窗：右键不产生菜单边沿，关闭后也不补发
     right_prev_ = in.down_right;
   }
 
@@ -613,9 +649,13 @@ void RenderLoop::frame(double now) {
   // 而矩形算得出"变在哪里"，后者才是区域重绘要的答案。
   const bool kb_preview_now = in.kb_progress || in.now < in.kb_preview_until;
   bool hover_follow = false;
+  // v0.6.4：更新弹窗是模态层 —— 底层 UI 悬停归零（弹窗按钮用独立 kBtnUpdate* 槽），
+  // 否则指针划过底层按钮会在遮罩下产生无效重绘与悬停缓存状态。
   const uint32_t hover_key =
-      hover_key_of(nvg_.ctx(), theme_, (float)w, (float)h, snap, in, snap.has_session,
-                   pip_mode_, in.fullscreen, has_picture, kb_preview_now, &hover_follow);
+      in.update.prompt
+          ? 0u
+          : hover_key_of(nvg_.ctx(), theme_, (float)w, (float)h, snap, in, snap.has_session,
+                         pip_mode_, in.fullscreen, has_picture, kb_preview_now, &hover_follow);
 
   // —— v0.4.0 d68：统一指针三态机 + 四事件三段式单/双击（UI_INTERACTION_PLAN §2/§3）——
   // 位置铁律：必须跑在跳帧闸门**之前** —— 按下/弹起/移动一帧都不能漏，否则拖动
@@ -628,9 +668,9 @@ void RenderLoop::frame(double now) {
   {
     const InteractionThresholds thr = interaction_thresholds(1.f);
     if (pip_mode_ || ctx_open_ || ctx_sub_open_ || speed_open_ || skin_open_ ||
-        pan_drag_ || help_open_) {
-      // 画中画/右键菜单/子菜单/倍速弹层/皮肤弹层/画面平移拖拽/帮助面板接管期间：
-      // 打断进行中的按压（见 d25/d45/d169/d182/d347/d350）
+        pan_drag_ || help_open_ || in.update.prompt) {
+      // 画中画/右键菜单/子菜单/倍速弹层/皮肤弹层/画面平移拖拽/帮助面板/更新弹窗
+      // 接管期间：打断进行中的按压（见 d25/d45/d169/d182/d347/d350/d460）
       if (ptr_state_ != PtrState::Idle) {
         ptr_state_ = PtrState::Idle;
         in_dbl_ = false;
@@ -652,8 +692,25 @@ void RenderLoop::frame(double now) {
         // 顶栏三键落在 hover bit0-2 → Widget；全屏态无顶栏（chrome 不渲染）。
         const SkinBtnGeom sb = skin_button_geom(theme_, (float)w);
         const bool on_skin_btn = in.mx >= sb.x && in.mx < sb.x + sb.w && in.my < sb.h;
+        const UpdateBtnGeom ub = update_button_geom(nvg_.ctx(), theme_, (float)w);
+        const bool upd_expanded = in.btns.hover[kBtnUpdateTop] > 0.01f;
+        const float upd_x = upd_expanded ? ub.x : ub.right - ub.base_w;
+        const float upd_w = upd_expanded ? ub.w : ub.base_w;
+        const bool on_update_btn =
+            in.update.stage == UpdateStage::Ready && in.mx >= upd_x &&
+            in.mx < upd_x + upd_w && in.my < ub.h;
+        // v0.6.4 d471：帮助按钮（右侧簇最左位；口径与悬停位一致）
+        const bool upd_vis_p = in.update.stage == UpdateStage::Ready;
+        const UpdateBtnGeom hb =
+            help_button_geom(nvg_.ctx(), theme_, (float)w, upd_vis_p,
+                             in.btns.hover[kBtnUpdateTop]);
+        const bool hexp_p = in.btns.hover[kBtnHelpTop] > 0.01f;
+        const float hbx = hexp_p ? hb.x : hb.right - hb.base_w;
+        const float hbw = hexp_p ? hb.w : hb.base_w;
+        const bool on_help_btn = in.mx >= hbx && in.mx < hbx + hbw && in.my < hb.h;
         const bool top_bar = !in.fullscreen && in.my < Lay.topBarH &&
-                             in.mx < (float)w - 3.f * Lay.winBtnW && !on_skin_btn;
+                             in.mx < (float)w - 3.f * Lay.winBtnW && !on_skin_btn &&
+                             !on_update_btn && !on_help_btn;
         ptr_region_ = top_bar ? PtrRegion::TopBar
                               : (hover_key != 0 ? PtrRegion::Widget : PtrRegion::Stage);
         ptr_state_ = PtrState::Pressed;
@@ -749,6 +806,14 @@ void RenderLoop::frame(double now) {
                                     snap.has_session);
   UiRegions R = compute_regions(nvg_.ctx(), theme_, (float)w, (float)h, snap, in,
                                 snap.has_session, pip_mode_, fade_now, thumb_ != nullptr);
+  // —— v0.6.4：更新弹窗布局（绘制/hit-test/归因唯一来源）——
+  // 模态卡片几何随窗口尺寸自适应，每帧出帧路径重算；跳帧路径不需要。
+  UpdateDialogLayout update_lay;
+  if (R.update_visible) {
+    update_lay = update_dialog_layout(nvg_.ctx(), theme_, (float)w, (float)h, in.update);
+    R.update_dialog = DmgRect{(int)update_lay.x, (int)update_lay.y, (int)update_lay.w,
+                              (int)update_lay.h};
+  }
   uint32_t dmg_reasons = 0;
   Damage dmg;
   // 脏区加入：外扩 2px（反锯齿/圆角溢出，§11）+ 窗口内钳制（Damage.add 不裁越界）
@@ -766,7 +831,7 @@ void RenderLoop::frame(double now) {
   };
   // 悬停位 → 控件矩形（与 hover_key_of 位定义一一对应，几何取自 UiRegions）
   auto add_hover_rects = [&](uint32_t key, const UiRegions& Rg, bool center_vis) {
-    for (int b = 0; b <= 17; b++) {
+    for (int b = 0; b <= 18; b++) {
       if (!(key & (1u << b))) continue;
       switch (b) {
         case 0: case 1: case 2: dmg_add(Rg.win_btn[b]); break;
@@ -784,6 +849,8 @@ void RenderLoop::frame(double now) {
         case 13: case 14: dmg_add(Rg.prompt_bar); break;  // d74 提示条两按钮
         case 16: dmg_add(Rg.bar_btn[kBtnSpeed]); break;   // d169 倍速键
         case 17: dmg_add(Rg.skin_btn); break;             // d182 皮肤按钮
+        case 18: dmg_add(Rg.update_btn); break;           // v0.6.4 d464 更新按钮
+        case 19: dmg_add(Rg.help_btn); break;             // v0.6.4 d471 帮助按钮
         default: break;
       }
     }
@@ -919,6 +986,11 @@ void RenderLoop::frame(double now) {
       else if (b <= kBtnWinClose) dmg_add(R.win_btn[b - kBtnWinMin]);
       else if (b == kBtnCenterPlay) dmg_add(R.center_play);
       else if (b == kBtnSkin) dmg_add(R.skin_btn);  // d182：顶栏皮肤按钮缓动
+      else if (b == kBtnUpdateTop) {  // v0.6.4 d464（更新缓动时帮助位随动左移）
+        dmg_add(R.update_btn);
+        dmg_add(R.help_btn);
+      } else if (b == kBtnHelpTop) dmg_add(R.help_btn);  // v0.6.4 d471
+      else if (b >= kBtnUpdate0 && b <= kBtnUpdate2) dmg_add(R.update_dialog);  // v0.6.4
       else dmg_add(R.prompt_bar);  // d74：kBtnClipPlay/kBtnClipIgnore（横幅内两按钮）
     }
     dmg_reasons |= 1u << 8;
@@ -939,6 +1011,26 @@ void RenderLoop::frame(double now) {
     dmg_all(1u << 4);
     dmg_reasons |= 1u << 4;
   }
+  // —— v0.6.4 d464：顶栏更新按钮出现/消失（Ready 边沿；旧∪新包络）——
+  // 帮助按钮位置随更新可见性联动，边沿帧一并补画旧∪新帮助包络。
+  if (R.update_btn_visible != last_regions_.update_btn_visible) {
+    dmg_add(last_regions_.update_btn);
+    dmg_add(R.update_btn);
+    dmg_add(last_regions_.help_btn);
+    dmg_add(R.help_btn);
+    dmg_reasons |= 1u << 4;
+  }
+  // —— v0.6.4 d471：顶栏帮助按钮出现/消失（全屏边沿；包络随宽度变化）——
+  if (R.help_btn_visible != last_regions_.help_btn_visible) {
+    dmg_add(last_regions_.help_btn);
+    dmg_add(R.help_btn);
+    dmg_reasons |= 1u << 4;
+  }
+  // —— v0.6.4：更新弹窗（模态，全屏遮罩 + 卡片）——
+  // 打开/关闭帧整窗重画（半透明遮罩不幂等，且关闭要把遮罩下的画面补回来）；
+  // 开着期间整窗失效（进度文字 4Hz 更新 + 卡片内容随 stage 变化，低频场景）。
+  if (in.update.prompt != last_in_key_.update.prompt) dmg_all(1u << 4);
+  if (in.update.prompt) dmg_all(1u << 4);
   // —— d169：倍速弹层开着（hover 高亮/按下反馈；几何固定，用上帧存档）——
   if (speed_open_) {
     dmg_add(last_regions_.speed_menu);
@@ -1209,14 +1301,12 @@ void RenderLoop::frame(double now) {
   // —— 空白处点击语义（单击 = 播放/暂停，双击 = 全屏）+ 中键静音 ——
   // 消歧：单击后等 dblClickSec（token，默认 300ms）；窗口内出现第二击 → 判双击，只切全屏。
   // "空白处"由 chrome 的几何判定（bar_hit / 顶栏三键），此处不重复实现第二份几何。
-  const bool on_winbtn =
-      in.my < theme_.layout.topBarH && in.mx >= w - 3 * theme_.layout.winBtnW;
   // d45：菜单开着 → 底层 UI 冻结交互。给视图层传 down=false 的副本（按钮悬停仍亮、
   // 按压/点击不落——菜单面板叠在哪块按钮上，点菜单就不能误触底下的按钮）。
   // 拖拽进行中的除外：传 false 会让松手瞬间误判"拖完提交"，故保持原值。
   ViewInput vin = in;
   if ((ctx_open_ || ctx_sub_open_ || speed_open_ || skin_open_ || pan_drag_ ||
-       help_open_) &&
+       help_open_ || in.update.prompt) &&
       !in.drag_progress && !in.drag_volume)
     vin.down = false;
 
@@ -1234,6 +1324,12 @@ void RenderLoop::frame(double now) {
       vin.btns.hover[kBtnWinMin] = vin.btns.hover[kBtnWinMax] = vin.btns.hover[kBtnWinClose] = 0.f;
       vin.btns.press[kBtnWinMin] = vin.btns.press[kBtnWinMax] = vin.btns.press[kBtnWinClose] = 0.f;
       vin.btns.hover[kBtnSkin] = vin.btns.press[kBtnSkin] = 0.f;  // d182：全屏无顶栏
+      vin.btns.hover[kBtnHelpTop] = vin.btns.press[kBtnHelpTop] = 0.f;  // d471：同上
+    }
+    // v0.6.4 d464：更新按钮不可见（全屏 / 非 Ready）→ 幂等清零，防 busy 冻结死循环
+    if (in.fullscreen || in.update.stage != UpdateStage::Ready) {
+      vin.btns.hover[kBtnUpdateTop] = 0.f;
+      vin.btns.press[kBtnUpdateTop] = 0.f;
     }
     if (snap.state != TransportState::PausedPlayback) {
       vin.btns.hover[kBtnCenterPlay] = 0.f;
@@ -1246,11 +1342,6 @@ void RenderLoop::frame(double now) {
     }
   }
   const BarHit bh = bar_hit(nvg_.ctx(), theme_, (float)w, (float)h, snap, vin, snap.has_session);
-  // on_center 必须跟随中央键的真实可见性：中央大播放键只在**暂停态**绘制
-  // （player_view.cpp: if (paused)），播放态中央是空白画面，点击应落入下面的
-  // 单/双击消歧（单击=播放/暂停、双击=全屏），不能被纯几何命中挡掉。
-  const bool on_center = snap.state == TransportState::PausedPlayback &&
-                         center_play_hit(theme_, (float)w, (float)h, vin.mx, vin.my);
   // —— d45：右键菜单条目表 + 布局（每帧重算；命中与绘制共用同一份几何）——
   // v0.6.1 d346：16 → 24（缩放四档 + 分隔线入菜单后满员 18；与 CtxMenuLayout
   // 的 ys[24]/sep[24] 成对扩容，两处必须同改）。
@@ -1706,6 +1797,47 @@ void RenderLoop::frame(double now) {
     help_lprev_ = in.down;
   }
 
+  // —— v0.6.4：更新弹窗按钮（模态：底层 vin.down 已冻结，这里吃真实 in.down）——
+  // 按钮状态用独立 kBtnUpdate0..2 槽；按钮语义 → UiIntent，全部由主线程执行
+  //（下载/安装/跳过/打开发布页都不允许在渲染线程做 I/O）。点卡片外无动作。
+  if (in.update.prompt && update_lay.btn_count > 0) {
+    const UpdateButtons ub = update_dialog_buttons(in.update);
+    const int upd_hit = update_dialog_button_at(update_lay, in.mx, in.my);
+    for (int i = 0; i < 3; ++i) {
+      const bool inside = i < ub.count && upd_hit == i;
+      const BtnState st =
+          button_hit(vin.btns, kBtnUpdate0 + i, inside, true, in.down, in.dt, theme_);
+      if (!st.clicked) continue;
+      switch (ub.kinds[i]) {
+        case UpdateButtonKind::Install:
+        case UpdateButtonKind::InstallRestart:
+          channel_.post_intent({UiIntent::Kind::UpdateInstall});
+          break;
+        case UpdateButtonKind::Download:
+          channel_.post_intent({UiIntent::Kind::UpdateDownload});
+          break;
+        case UpdateButtonKind::Later:
+        case UpdateButtonKind::Close:
+          channel_.post_intent({UiIntent::Kind::UpdateLater});
+          break;
+        case UpdateButtonKind::Skip:
+          channel_.post_intent({UiIntent::Kind::UpdateSkip});
+          break;
+        case UpdateButtonKind::Retry:
+          channel_.post_intent({UiIntent::Kind::UpdateRetry});
+          break;
+        case UpdateButtonKind::OpenFolder:
+        case UpdateButtonKind::OpenFolderDeb:
+          channel_.post_intent({UiIntent::Kind::UpdateOpenFolder});
+          break;
+        case UpdateButtonKind::OpenPage:
+          channel_.post_intent({UiIntent::Kind::UpdateOpenPage});
+          break;
+        case UpdateButtonKind::None: break;
+      }
+    }
+  }
+
   // —— d169：倍速弹层左键交互（标准菜单语义：同条目按下+弹起才激活；点面板外=只关）——
   if (speed_open_) {
     if (in.down && !speed_lprev_) {
@@ -2092,16 +2224,28 @@ void RenderLoop::frame(double now) {
     draw_ctx_menu(nvg_.ctx(), theme_, sub_lay, sub_items, sub_n, ctx_sub_hover_, clip);
   // —— v0.6.1 d350：F1 帮助面板（浮层栈顶；全屏遮罩压暗 + 居中快捷键表）——
   if (!pip_mode_ && help_open_) draw_help(nvg_.ctx(), theme_, (float)w, (float)h, clip);
+  // —— v0.6.4：更新弹窗（模态，浮层栈顶；全屏遮罩 + 居中卡片；画中画同样可见）——
+  if (R.update_visible) {
+    BtnState upd_states[3];
+    for (int i = 0; i < 3; ++i) {
+      upd_states[i].hover = vin.btns.hover[kBtnUpdate0 + i];
+      upd_states[i].press = vin.btns.press[kBtnUpdate0 + i];
+    }
+    draw_update_dialog(nvg_.ctx(), theme_, (float)w, (float)h, in.update, update_lay,
+                       upd_states, clip);
+  }
 
   // 按钮交互收尾（必须在每帧末尾推进，画中画等无按钮帧也不例外，
-  // 否则"松开"边沿会漏掉、按压归属会一直挂着）
-  button_fx_end_frame(vin.btns, vin.down);
+  // 否则"松开"边沿会漏掉、按压归属会一直挂着）。
+  // v0.6.4：更新弹窗吃真实 in.down（底层冻结用 vin.down=false），进度跟踪用同一个
+  // ButtonFx.was_down —— 这里必须用 in.down，否则弹窗按钮永远看不到松开边沿。
+  button_fx_end_frame(vin.btns, in.update.prompt ? in.down : vin.down);
 
   // —— 缩略图预览请求（渲染线程判定悬停 → 主线程驱动 thumb worker）——
   // 节流：百分比变化超 0.4% 才投递（拖拽/滑动不至于每帧一请求；worker 侧另有
   // latest-wins + 近重复去重兜底）。键盘拖动进度同样出预览（d29）。
   const bool kb_preview = in.kb_progress || in.now < in.kb_preview_until;
-  const bool preview_on = !pip_mode_ && has_picture && snap.duration > 0 &&
+  const bool preview_on = !pip_mode_ && !in.update.prompt && has_picture && snap.duration > 0 &&
                           (bh.track || in.drag_progress || kb_preview);
   if (preview_on) {
     const float p = in.drag_progress  ? in.drag_value
@@ -2237,6 +2381,10 @@ ViewCallbacks make_intent_callbacks(ViewStateChannel& ch) {
   cb.on_seek = [&ch](double sec) { ch.post_intent({UiIntent::Kind::Seek, sec, false}); };
   cb.on_volume = [&ch](float v) { ch.post_intent({UiIntent::Kind::Volume, v, false}); };
   cb.on_mute = [&ch](bool m) { ch.post_intent({UiIntent::Kind::Mute, 0, m}); };
+  // v0.6.4 d464：顶栏更新按钮 → 主线程统一分流（自安装/投屏确认/便携打开）
+  cb.on_update = [&ch] { ch.post_intent({UiIntent::Kind::UpdateInstall}); };
+  // v0.6.4 d471：顶栏帮助按钮 → 复用 F1 的 ToggleHelp 意图（主线程持开关镜像）
+  cb.on_help = [&ch] { ch.post_intent({UiIntent::Kind::ToggleHelp}); };
   return cb;
 }
 

@@ -82,9 +82,12 @@ struct UiRegions {
   DmgRect speed_menu;   // d169 倍速档位弹层（render_loop 出帧路径用 speed_lay 补填）
   DmgRect skin_menu;    // d182 皮肤弹层（render_loop 出帧路径用 skin_lay 补填）
   DmgRect prompt_bar;   // d74 剪贴板链接提示条横幅
+  DmgRect update_dialog;  // v0.6.4：更新弹窗卡片（render_loop 用布局补填）
   // —— 控件级（P1/P3 归因粒度）——
   DmgRect win_btn[3];             // 顶栏三键热区
   DmgRect skin_btn;               // d182：顶栏皮肤按钮热区
+  DmgRect update_btn;             // v0.6.4 d464：顶栏更新按钮展开包络（收起/展开共用脏区）
+  DmgRect help_btn;               // v0.6.4 d471：顶栏帮助按钮展开包络（位置随更新按钮联动）
   DmgRect bar_btn[kBtnIdCount];   // 底栏按钮热区（媒体类无会话时仍给几何，归因门控）
   DmgRect track, time_cur, time_left;
   DmgRect volume;                 // 音量条 + 滑块包络（热区同式 bar_hit.vol）
@@ -94,6 +97,9 @@ struct UiRegions {
   bool osd_visible = false;       // OSD 本帧是否绘制（osd_kind!=0 && 非画中画）
   bool thumb_visible = false;     // 缩略图浮层本帧是否绘制（悬停/拖拽/键盘预览 && 有画面）
   bool prompt_visible = false;    // d74 提示条本帧是否绘制（clip_url 非空 && 生命周期内）
+  bool update_visible = false;    // v0.6.4：更新弹窗本帧是否绘制（模态，画中画不画）
+  bool update_btn_visible = false;  // v0.6.4 d464：顶栏更新按钮是否绘制（Ready && 非全屏）
+  bool help_btn_visible = false;    // v0.6.4 d471：顶栏帮助按钮是否绘制（非全屏恒绘）
 };
 
 // 一次算出全部可绘制元素的矩形（每帧出帧路径调用一次；vg 仅用于时间文字测量，

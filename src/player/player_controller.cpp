@@ -419,6 +419,11 @@ void PlayerController::on_command(const DmrCommand& cmd) {
     case DmrCommand::Type::SetMute: handle_mute(cmd, now); break;
     case DmrCommand::Type::SetSpeed: handle_speed(cmd, now); break;
     case DmrCommand::Type::SelectPreset: handle_preset(cmd, now); break;
+    case DmrCommand::Type::AddAudioTrack:
+      // d267 引入的镜像外挂配音轨指令；v0.6.3 退回后当前无人投递（枚举保留占位）。
+      // 显式接住以满足 -Wswitch，未来恢复音轨并入时在此接线。
+      FR_LOG_WARN("[MPV] 忽略 AddAudioTrack（音轨并入当前未接线）");
+      break;
   }
 }
 

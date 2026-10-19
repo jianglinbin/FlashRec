@@ -91,6 +91,21 @@ def win_main(wait):  # pragma: no cover - 仅在 Windows 上执行
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
 
+    def process_is_flashrec(pid):
+        """d472 后加固：窗口进程镜像必须是 flashrec.exe —— 标题含 FlashRec 的
+        浏览器标签（GitHub 仓库页等）此前会被误发 WM_QUIT 关掉（2026-10-19 实锤）。"""
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            return False
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(1024)
+        ok = kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size))
+        kernel32.CloseHandle(h)
+        if not ok:
+            return False
+        return buf.value.rsplit("\\", 1)[-1].lower() == "flashrec.exe"
+
     def find_windows():
         found = []
 
@@ -101,7 +116,10 @@ def win_main(wait):  # pragma: no cover - 仅在 Windows 上执行
                 buf = ctypes.create_unicode_buffer(n + 1)
                 user32.GetWindowTextW(hwnd, buf, n + 1)
                 if "FlashRec" in buf.value:
-                    found.append((hwnd, buf.value))
+                    pid = wintypes.DWORD(0)
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if pid.value and process_is_flashrec(pid.value):
+                        found.append((hwnd, buf.value))
             return True
 
         user32.EnumWindows(cb, 0)

@@ -92,7 +92,6 @@ size_t adts_wrap(const uint8_t* frame, size_t len, uint8_t* out, size_t out_cap)
   if (7 + len > out_cap) return 0;
   // ADTS：sync FFF + ID0 + layer00 + protection_absent1 + profile(LC=01)
   //      + sf_index 0100(44100) + private 0 + channel 010 + ...
-  const uint16_t full = (uint16_t)(7 + len);
   out[0] = 0xFF;
   out[1] = 0xF1;                 // sync FFF + ID=0 + layer=00 + protection_absent=1
   out[2] = (uint8_t)(0x40u | ((len >> 11) & 0x03u));  // profile=01(LC) + freq=0100 + ch 高 1 位=0

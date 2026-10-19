@@ -304,17 +304,6 @@ void num_field(const JVal& root, std::initializer_list<const char*> path, float*
   }
 }
 
-void dbl_field(const JVal& root, std::initializer_list<const char*> path, double* dst,
-               const char* ctx, std::vector<std::string>* warns) {
-  if (const JVal* v = dig(root, path)) {
-    if (v->t == JVal::Num) {
-      *dst = v->n;
-      return;
-    }
-    if (warns) warns->push_back(std::string(ctx) + ": 非数值，保留默认");
-  }
-}
-
 void bool_from_shape(const JVal& shape, const char* key, bool* dst, const char* ctx,
                      std::vector<std::string>* warns) {
   if (const JVal* v = shape.get(key)) {

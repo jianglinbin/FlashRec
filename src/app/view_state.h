@@ -67,6 +67,14 @@ struct UiIntent {
     VideoZoom,       // 右键菜单「画面缩放」档位（value = 百分比 50..500 整数）
     FitMode,         // d426：画面填充模式（右键子菜单；value = 0 自动/1 铺满/2 完整画面/3 拉伸）
     LanguageChanged,  // v0.6.2 d362：UI 语言切换（右键语言子菜单；value = 0 zh-CN / 1 en-US）
+    // —— v0.6.4 d460：自动更新弹窗（渲染线程点击 → 主线程执行）——
+    UpdateInstall,     // 安装/更新并重启（按安装形态分发）
+    UpdateDownload,    // 手动下载（自动下载关闭时）
+    UpdateLater,       // 稍后（本次运行不再自动弹）
+    UpdateSkip,        // 跳过此版本（落盘 + 删除已下载包）
+    UpdateRetry,       // 重试检查/下载
+    UpdateOpenFolder,  // 打开安装包所在文件夹（便携 ZIP / deb）
+    UpdateOpenPage,    // 打开发布页（开发构建/无资产）
   };
   // R1：可持久化 UI 偏好 id（UiPrefChanged 的 pref 载荷；与 settings.json 键一一对应）
   // v0.6.1 d342：AlwaysOnTop = ui.always_on_top（窗口置顶，独立于画中画）。

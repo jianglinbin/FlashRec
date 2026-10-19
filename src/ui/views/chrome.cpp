@@ -14,6 +14,11 @@
 #include "ui/views/player_view.h"  // ViewInput / ViewCallbacks
 #include "ui/widgets.h"
 
+// d472：帮助面板版本行用（CMake target_compile_definitions 注入；直编兜底）
+#ifndef FLASHREC_VERSION
+#define FLASHREC_VERSION "0.0.0-unknown"
+#endif
+
 namespace fr {
 
 namespace {
@@ -156,6 +161,131 @@ void draw_skin_button(NVGcontext* vg, const Theme& t, float w, ViewInput& in, Vi
               btn_icon_color(t, st));
   }
   if (st.clicked && cb.on_skin) cb.on_skin();
+}
+
+// —— v0.6.4 d464：顶栏更新按钮 ——
+UpdateBtnGeom update_button_geom(NVGcontext* vg, const Theme& t, float win_w) {
+  const auto& L = t.layout;
+  const SkinBtnGeom sb = skin_button_geom(t, win_w);
+  UpdateBtnGeom g;
+  g.h = L.topBarH;
+  g.y = 0;
+  g.right = sb.x - L.skinBtnGap;
+  g.base_w = L.skinBtnSize;
+  const float label_w = text_width(vg, L.titleFont, tr(i18n::StrId::UpdTopBtnLabel));
+  g.pill_w = L.skinBtnGap + label_w + L.skinBtnGap + L.skinBtnSize;
+  g.w = g.pill_w;
+  g.x = g.right - g.pill_w;
+  g.icon_cx = g.right - L.skinBtnSize * 0.5f;
+  g.icon_cy = L.topBarH * 0.5f;
+  return g;
+}
+
+void draw_update_button(NVGcontext* vg, const Theme& t, float w, ViewInput& in, ViewCallbacks& cb,
+                        const DmgRect* clip) {
+  if (in.update.stage != UpdateStage::Ready) return;  // 就绪才出现（自动下载完成 = 唯一提示）
+  const auto& L = t.layout;
+  const UpdateBtnGeom g = update_button_geom(vg, t, w);
+  // 展开态整条 pill 可点、收起态只认图标方块。用上一帧 hover 选命中矩形：
+  // 展开瞬间命中随之放大，指针向左移不会在视觉扩展途中断掉悬停。
+  const bool expanded = in.btns.hover[kBtnUpdateTop] > 0.01f;
+  const float hx = expanded ? g.x : g.right - g.base_w;
+  const float hw = expanded ? g.w : g.base_w;
+  const bool inside = in.mx >= hx && in.mx < hx + hw && in.my >= 0 && in.my < g.h;
+  BtnState st = button_hit(in.btns, kBtnUpdateTop, inside, true, in.down, in.dt, t);
+  if (dmg_hit(clip, g.x, g.y, g.w, g.h)) {
+    const float k = 1.f - (1.f - L.btnPressScale) * st.press;
+    // 底板右缘固定、宽度随 hover 左扩；按压只缩高度与图标，文字锚点不动
+    const float pw = g.base_w + (g.pill_w - g.base_w) * st.hover;
+    const float px = g.right - pw;
+    const float bh = L.skinBtnSize * k;
+    const float py = g.icon_cy - bh * 0.5f;
+    if (st.hover > 0.004f) {
+      NVGcolor c = t.btnHoverBg;
+      c.a *= st.hover;
+      rounded_rect(vg, px, py, pw, bh, L.btnRadius * k, c);
+    }
+    if (st.press > 0.004f) {
+      NVGcolor c = t.btnPressBg;
+      c.a *= st.press;
+      rounded_rect(vg, px, py, pw, bh, L.btnRadius * k, c);
+    }
+    if (st.hover > 0.004f) {
+      NVGcolor tc = t.titleText;
+      tc.a *= st.hover;
+      text(vg, t, g.right - L.skinBtnSize - L.skinBtnGap, g.icon_cy, L.titleFont, tc,
+           tr(i18n::StrId::UpdTopBtnLabel), NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
+    }
+    icon_update(vg, g.icon_cx, g.icon_cy, L.skinBtnIcon * k, btn_icon_color(t, st));
+  }
+  if (st.clicked && cb.on_update) cb.on_update();
+}
+
+// —— v0.6.4 d471：顶栏帮助按钮 ——
+UpdateBtnGeom help_button_geom(NVGcontext* vg, const Theme& t, float win_w,
+                               bool upd_visible, float upd_hover) {
+  const auto& L = t.layout;
+  const UpdateBtnGeom ub = update_button_geom(vg, t, win_w);
+  UpdateBtnGeom g;
+  g.h = L.topBarH;
+  g.y = 0;
+  // 更新可见：右缘 = 更新展开包络左缘 - 间距（展开动画进行中帮助随 upd_hover 平滑左移）；
+  // 更新不可见：直接顶替更新按钮收起位（皮肤按钮左侧）。
+  g.right = upd_visible ? (ub.x - L.skinBtnGap) : ub.right;
+  g.base_w = L.skinBtnSize;
+  const float label_w = text_width(vg, L.titleFont, tr(i18n::StrId::HelpTopBtnLabel));
+  g.pill_w = L.skinBtnGap + label_w + L.skinBtnGap + L.skinBtnSize;
+  // upd_hover ∈ [0,1]：更新悬停展开时其包络左缘左移，帮助随之让位（几何与绘制同源）
+  if (upd_visible && upd_hover > 0.001f)
+    g.right -= (ub.pill_w - ub.base_w) * upd_hover;
+  g.w = g.pill_w;
+  g.x = g.right - g.pill_w;
+  g.icon_cx = g.right - L.skinBtnSize * 0.5f;
+  g.icon_cy = L.topBarH * 0.5f;
+  return g;
+}
+
+void draw_help_button(NVGcontext* vg, const Theme& t, float w, ViewInput& in, ViewCallbacks& cb,
+                      const DmgRect* clip) {
+  if (in.fullscreen) return;  // 全屏无顶栏
+  const auto& L = t.layout;
+  const bool upd_visible = in.update.stage == UpdateStage::Ready;
+  const UpdateBtnGeom g =
+      help_button_geom(vg, t, w, upd_visible, in.btns.hover[kBtnUpdateTop]);
+  // 命中矩形口径与更新按钮一致：展开态整条 pill、收起态只认图标方块
+  const bool expanded = in.btns.hover[kBtnHelpTop] > 0.01f;
+  const float hx = expanded ? g.x : g.right - g.base_w;
+  const float hw = expanded ? g.w : g.base_w;
+  const bool inside = in.mx >= hx && in.mx < hx + hw && in.my >= 0 && in.my < g.h;
+  BtnState st = button_hit(in.btns, kBtnHelpTop, inside, true, in.down, in.dt, t);
+  if (dmg_hit(clip, g.x, g.y, g.w, g.h)) {
+    const float k = 1.f - (1.f - L.btnPressScale) * st.press;
+    const float pw = g.base_w + (g.pill_w - g.base_w) * st.hover;
+    const float px = g.right - pw;
+    const float bh = L.skinBtnSize * k;
+    const float py = g.icon_cy - bh * 0.5f;
+    if (st.hover > 0.004f) {
+      NVGcolor c = t.btnHoverBg;
+      c.a *= st.hover;
+      rounded_rect(vg, px, py, pw, bh, L.btnRadius * k, c);
+    }
+    if (st.press > 0.004f) {
+      NVGcolor c = t.btnPressBg;
+      c.a *= st.press;
+      rounded_rect(vg, px, py, pw, bh, L.btnRadius * k, c);
+    }
+    if (st.hover > 0.004f) {
+      NVGcolor tc = t.titleText;
+      tc.a *= st.hover;
+      text(vg, t, g.right - L.skinBtnSize - L.skinBtnGap, g.icon_cy, L.titleFont, tc,
+           tr(i18n::StrId::HelpTopBtnLabel), NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
+    }
+    // ? 图标：titleFont 字形直绘（无现成矢量图标；字号对齐其余顶栏图标）
+    NVGcolor ic = btn_icon_color(t, st);
+    text(vg, t, g.icon_cx, g.icon_cy + L.skinBtnIcon * 0.04f, L.skinBtnIcon * k, ic, "?",
+         NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+  }
+  if (st.clicked && cb.on_help) cb.on_help();
 }
 
 SkinMenuLayout skin_menu_layout(NVGcontext* vg, const Theme& t, float win_w, float win_h,
@@ -718,16 +848,18 @@ void draw_help(NVGcontext* vg, const Theme& t, float win_w, float win_h,
     act_w = std::max(act_w, text_width(vg, font, r.action));
     key_w = std::max(key_w, text_width(vg, font, r.keys));
   }
-  const float card_w = pad * 2.f + act_w + col_gap + key_w;
+  // 标题（d472：软件名 + 空格 + 版本号-帮助面板 一行；版本号编译期注入）
+  const std::string title = std::string("FlashRec v") + FLASHREC_VERSION + "-" +
+                            tr(i18n::StrId::HelpPanel);
+  const float title_w = text_width(vg, font, title.c_str());
   const float title_h = font * 2.1f;
   const float card_h = title_h + kN * row_h + pad;
+  const float card_w = std::max(pad * 2.f + act_w + col_gap + key_w, title_w + pad * 2.f);
   const float cx0 = std::round((win_w - card_w) * 0.5f);
   const float cy0 = std::round((win_h - card_h) * 0.5f);
   rounded_rect(vg, cx0, cy0, card_w, card_h, L.ctxRadius, t.barBg);
-
-  // 标题
   text(vg, t, cx0 + card_w * 0.5f, cy0 + title_h * 0.55f, font, t.icon,
-       tr(i18n::StrId::HelpTitle), NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+       title.c_str(), NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
   // 分隔线
   nvgBeginPath(vg);
   nvgMoveTo(vg, cx0 + pad, cy0 + title_h);

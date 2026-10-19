@@ -153,6 +153,48 @@ jobs:
           ls -l dist
           n=$(ls dist | grep -Ec 'FlashRec-.*-win64\.zip|FlashRec-.*-win64-setup\.exe|flashrec_.*_amd64\.deb|FlashRec-.*-x86_64\.AppImage')
           [ "$n" = "4" ] || { echo "四件不齐（$n/4）→ 中止发布"; exit 1; }
+      - name: Generate latest.json
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, sys
+          from datetime import datetime, timezone
+
+          dist = pathlib.Path("dist")
+          tag = os.environ["GITHUB_REF_NAME"]
+          version = tag[1:] if tag.startswith("v") else tag
+          repo = os.environ["GITHUB_REPOSITORY"]
+          spec = {
+              "windows_setup": f"FlashRec-{version}-win64-setup.exe",
+              "windows_zip": f"FlashRec-{version}-win64.zip",
+              "linux_appimage": f"FlashRec-{version}-x86_64.AppImage",
+              "linux_deb": f"flashrec_{version}_amd64.deb",
+          }
+          assets = {}
+          for key, name in spec.items():
+              p = dist / name
+              if not p.is_file():
+                  sys.exit(f"latest.json: 缺少 {name}")
+              h = hashlib.sha256()
+              with p.open("rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              assets[key] = {
+                  "name": name,
+                  "size": p.stat().st_size,
+                  "sha256": h.hexdigest(),
+              }
+          manifest = {
+              "schema": 1,
+              "version": version,
+              "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "release_url": f"https://github.com/{repo}/releases/tag/{tag}",
+              "assets": assets,
+          }
+          out = dist / "latest.json"
+          out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                         encoding="utf-8")
+          print(out.read_text(encoding="utf-8"))
+          PY
           (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
       - uses: softprops/action-gh-release@v2
         with:
@@ -161,4 +203,5 @@ jobs:
             dist/FlashRec-*-win64-setup.exe
             dist/flashrec_*_amd64.deb
             dist/FlashRec-*-x86_64.AppImage
+            dist/latest.json
             dist/SHA256SUMS.txt

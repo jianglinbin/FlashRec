@@ -31,6 +31,32 @@
     "volume": 100,
     "muted": false
   },
+  "update": {
+    "enabled": true,
+    "auto_check": true,
+    "check_interval_hours": 4,
+    "startup_delay_sec": 30,
+    "auto_download": true,
+    "skipped_version": "",
+    "last_check_at": 0,
+    "next_retry_at": 0,
+    "fail_count": 0,
+    "direct_enabled": true,
+    "api_base": "",
+    "probe": {
+      "timeout_ms": 4000,
+      "concurrency": 4,
+      "cache_sec": 600
+    },
+    "proxies": [
+      { "name": "gh-proxy",    "prefix": "https://gh-proxy.com/",      "enabled": true },
+      { "name": "ghproxy.net", "prefix": "https://ghproxy.net/",       "enabled": true },
+      { "name": "ghfast.top",  "prefix": "https://ghfast.top/",        "enabled": true },
+      { "name": "gitmirror",   "prefix": "https://hub.gitmirror.com/",  "enabled": true },
+      { "name": "gh.llkk.cc",  "prefix": "https://gh.llkk.cc/",        "enabled": false },
+      { "name": "moeyy",       "template": "https://moeyy.cn/gh-proxy/?url={url}", "enabled": false }
+    ]
+  },
   "clipboard": {
     "play": true
   }

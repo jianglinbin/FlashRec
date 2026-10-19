@@ -46,7 +46,8 @@ WizardStyle=modern
 OutputDir=__FR_OUTPUT__
 OutputBaseFilename=FlashRec-__FR_VERSION__-win64-setup
 ; 应用是单实例 + 托盘常驻：覆盖正在运行的 exe 会失败，所以先请用户关掉它。
-; RestartApplications=no —— DMR 不该被安装程序自作主张拉起来（启动由用户点完成页的勾）。
+; RestartApplications=no —— 普通安装/Esc 结束时不自动拉起；自更新由更新器传
+; /RELAUNCH=1，下面 [Code] 识别后仅在那种场景重启新版本。
 CloseApplications=yes
 RestartApplications=no
 
@@ -73,3 +74,12 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "立即启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; 自更新（更新器带 /RELAUNCH）：静默安装结束后以原用户身份拉起新版本。
+Filename: "{app}\{#MyAppExeName}"; Check: RelaunchRequested; Flags: nowait runhidden runasoriginaluser
+
+[Code]
+function RelaunchRequested(): Boolean;
+begin
+  { 自定义参数必须是 /Name=Value 形式，Inno 才能识别；更新器传 /RELAUNCH=1 }
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;

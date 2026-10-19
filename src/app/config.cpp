@@ -75,6 +75,8 @@ class MiniJson {
     std::map<std::string, std::string> f;
   };
   std::vector<MonRaw> monitors;
+  // v0.6.4：update.proxies[] 对象数组（name / prefix / template / enabled）
+  std::vector<MonRaw> proxies;
 
  private:
   void ws() {
@@ -158,6 +160,8 @@ class MiniJson {
           parse_protocol_info();
         else if (path == "ui.window.monitors")
           parse_monitors();
+        else if (path == "update.proxies")
+          parse_proxies();
         else
           skip_value();
       } else {
@@ -210,9 +214,35 @@ class MiniJson {
       break;
     }
   }
+  // v0.6.4：update.proxies[] —— 与 monitors 同构的对象数组；未知字段跳过
+  void parse_proxies() {
+    if (!eat('[')) return;
+    if (eat(']')) return;
+    for (;;) {
+      if (peek() == '{') {
+        MonRaw m;
+        if (!eat('{')) break;
+        if (!eat('}')) {
+          for (;;) {
+            std::string key = str();
+            if (!eat(':')) break;
+            if (!key.empty()) m.f[key] = scalar();
+            if (eat(',')) { ws(); if (peek() == '}') break; continue; }
+            eat('}');
+            break;
+          }
+        }
+        if (!m.f.empty()) proxies.push_back(std::move(m));
+      } else {
+        scalar();
+      }
+      if (eat(',')) { ws(); if (peek() == ']') break; continue; }
+      eat(']');
+      break;
+    }
+  }
   // d146：未知值（数组/嵌套对象）配对跳过；字符串感知（值内括号不计数）
-  void skip_value() {
-    char c = peek();
+  void skip_value() {    char c = peek();
     if (c != '[' && c != '{') { scalar(); return; }
     int depth = 0;
     while (i_ < s_.size()) {
@@ -234,6 +264,16 @@ class MiniJson {
   std::string s_;
   size_t i_ = 0;
 };
+
+// v0.6.4：更新端点只允许 HTTPS；loopback 明文仅供测试（AUTO_UPDATE_PLAN §12）。
+bool is_loopback_http(const std::string& u) {
+  return u.rfind("http://127.0.0.1", 0) == 0 || u.rfind("http://localhost", 0) == 0 ||
+         u.rfind("http://[::1]", 0) == 0;
+}
+bool is_secure_url(const std::string& u) {
+  if (u.rfind("https://", 0) == 0) return u.size() > 8;
+  return is_loopback_http(u);
+}
 
 }  // namespace
 
@@ -276,6 +316,13 @@ Config Config::load(const std::string& path) {
     } catch (...) {
       return dft;  // 坏值回默认，绝不让配置文件把程序搞挂
     }
+  };
+  auto get_ll = [&](const char* k, long long dft) {
+    auto* v = get(k);
+    if (!v || v->empty()) return dft;
+    long long out = dft;
+    auto [p, ec] = std::from_chars(v->data(), v->data() + v->size(), out);
+    return ec == std::errc() ? out : dft;
   };
   if (auto* lv = get("log.level"); lv && !lv->empty()) cfg.log_level = *lv;
   cfg.log_trace_http_body = get_bool("log.trace_http_body", cfg.log_trace_http_body);
@@ -338,6 +385,79 @@ Config Config::load(const std::string& path) {
   cfg.player_fit_mode = get_int("player.fit_mode", cfg.player_fit_mode);
   if (cfg.player_fit_mode < 0 || cfg.player_fit_mode > 3) cfg.player_fit_mode = 0;
 
+  // —— v0.6.4：自动更新（update 组；检查节奏 = 启动一次 + 每 4 小时，d454）——
+  {
+    auto& up = cfg.update;
+    up.enabled = get_bool("update.enabled", up.enabled);
+    up.auto_check = get_bool("update.auto_check", up.auto_check);
+    up.check_interval_hours = get_int("update.check_interval_hours", up.check_interval_hours);
+    if (up.check_interval_hours < 1) up.check_interval_hours = 1;
+    if (up.check_interval_hours > 168) up.check_interval_hours = 168;
+    up.startup_delay_sec = get_int("update.startup_delay_sec", up.startup_delay_sec);
+    if (up.startup_delay_sec < 0) up.startup_delay_sec = 0;
+    if (up.startup_delay_sec > 600) up.startup_delay_sec = 600;
+    up.auto_download = get_bool("update.auto_download", up.auto_download);
+    if (auto* v = get("update.skipped_version"); v) up.skipped_version = *v;
+    up.last_check_at = get_ll("update.last_check_at", up.last_check_at);
+    if (up.last_check_at < 0) up.last_check_at = 0;
+    up.next_retry_at = get_ll("update.next_retry_at", up.next_retry_at);
+    if (up.next_retry_at < 0) up.next_retry_at = 0;
+    up.fail_count = get_int("update.fail_count", up.fail_count);
+    if (up.fail_count < 0) up.fail_count = 0;
+    up.direct_enabled = get_bool("update.direct_enabled", up.direct_enabled);
+    if (auto* v = get("update.api_base"); v && !v->empty()) {
+      if (is_secure_url(*v))
+        up.api_base = *v;
+      else
+        FR_LOG_WARN("[APP] update.api_base 非 HTTPS（且非 loopback），已忽略");
+    }
+    up.probe.timeout_ms = get_int("update.probe.timeout_ms", up.probe.timeout_ms);
+    if (up.probe.timeout_ms < 500) up.probe.timeout_ms = 500;
+    if (up.probe.timeout_ms > 30000) up.probe.timeout_ms = 30000;
+    up.probe.concurrency = get_int("update.probe.concurrency", up.probe.concurrency);
+    if (up.probe.concurrency < 1) up.probe.concurrency = 1;
+    if (up.probe.concurrency > 8) up.probe.concurrency = 8;
+    up.probe.cache_sec = get_int("update.probe.cache_sec", up.probe.cache_sec);
+    if (up.probe.cache_sec < 0) up.probe.cache_sec = 0;
+    if (up.probe.cache_sec > 86400) up.probe.cache_sec = 86400;
+
+    int idx = 0;
+    for (const auto& raw : j.proxies) {
+      if (up.proxies.size() >= 16) break;
+      auto fs = [&](const char* k) -> const std::string* {
+        auto it = raw.f.find(k);
+        return it == raw.f.end() ? nullptr : &it->second;
+      };
+      UpdateProxy p;
+      if (auto* v = fs("name"); v && !v->empty()) p.name = *v;
+      if (auto* v = fs("prefix"); v) p.prefix = *v;
+      if (auto* v = fs("template"); v) p.url_template = *v;
+      if (auto* v = fs("enabled"); v) p.enabled = (*v == "true" || *v == "1");
+      ++idx;
+      if (p.prefix.empty() == p.url_template.empty()) {
+        FR_LOG_WARN("[APP] update.proxies[{}] prefix/template 必须二选一，已跳过", idx - 1);
+        continue;
+      }
+      if (!p.prefix.empty()) {
+        if (!is_secure_url(p.prefix)) {
+          FR_LOG_WARN("[APP] update.proxies[{}] prefix 非 HTTPS，已跳过", idx - 1);
+          continue;
+        }
+        if (p.prefix.back() != '/') p.prefix += '/';
+      } else {
+        if (p.url_template.find("{url}") == std::string::npos || !is_secure_url(p.url_template)) {
+          FR_LOG_WARN("[APP] update.proxies[{}] template 缺 {{url}} 或非 HTTPS，已跳过", idx - 1);
+          continue;
+        }
+      }
+      if (p.name.empty()) p.name = "proxy" + std::to_string(idx);
+      up.proxies.push_back(std::move(p));
+    }
+    FR_LOG_INFO("[APP] 更新配置：enabled={} auto_check={} interval={}h startup={}s proxies={}",
+                up.enabled, up.auto_check, up.check_interval_hours, up.startup_delay_sec,
+                up.proxies.size());
+  }
+
   // —— airplay（v0.6.0 d267；§9 键表；FR_AIRPLAY=OFF 时这些值不被消费）——
   cfg.airplay_enabled = get_bool("airplay.enabled", cfg.airplay_enabled);
   if (auto* v = get("airplay.friendly_name"); v) cfg.airplay_friendly_name = *v;
@@ -376,16 +496,20 @@ bool group_body(const std::string& t, size_t key_pos, size_t* lbrace, size_t* rb
     char c = t[i];
     if (c == '"') {  // 字符串整体跳过（转义感知）
       ++i;
+      bool closed = false;
       while (i < t.size()) {
         char q = t[i++];
         if (q == '\\') { if (i < t.size()) ++i; else return false; continue; }
-        if (q == '"') break;
+        if (q == '"') { closed = true; break; }
       }
-      if (i >= t.size()) return false;
+      if (!closed) return false;
+      // i 已指向闭合引号后一位；回退一步抵消 for 的 ++i，避免吞掉紧随其后的 '}' / ']'
+      --i;
       continue;
     }
-    if (c == '{' || c == '[') ++depth;
-    else if (c == '}' || c == ']') {
+    if (c == '{' || c == '[') {
+      ++depth;
+    } else if (c == '}' || c == ']') {
       if (--depth == 0) { *lbrace = lb; *rbrace = i; return true; }
     }
   }

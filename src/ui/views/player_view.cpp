@@ -81,6 +81,8 @@ void draw_player_view(NVGcontext* vg, const Theme& t, float w, float h,
     }
     draw_win_buttons(vg, t, w, in, cb, clip);
     draw_skin_button(vg, t, w, in, cb, clip);  // d182：顶栏皮肤按钮
+    draw_update_button(vg, t, w, in, cb, clip);  // d464：更新就绪按钮（皮肤按钮左侧）
+    draw_help_button(vg, t, w, in, cb, clip);  // d471：帮助按钮（右侧按钮簇最左位）
   }
 
   // —— 底栏 + 悬停缩略图浮层（与待机态共用一份实现；缩略图仅播放态有）——

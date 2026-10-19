@@ -7,7 +7,8 @@
 
 #include <nanovg.h>
 
-#include "ui/widgets.h"  // ButtonFx
+#include "ui/views/update_ui.h"  // v0.6.4 d460：更新弹窗数据
+#include "ui/widgets.h"          // ButtonFx
 
 namespace fr {
 
@@ -70,6 +71,8 @@ struct ViewInput {
   // ""=取不到不画不猜；"no"=软解；其余=硬解 + 后端名。同 sw_video：渲染线程本地
   // 真值，不入 input_changed 同步；定长缓冲保住 ViewInput 的平凡可复制约束。
   char hwdec[32] = {};
+  // v0.6.4 d460：更新弹窗（主线程写、渲染线程只读；prompt=true 时最高模态）
+  UpdateUi update;
 };
 
 struct ViewCallbacks {
@@ -78,6 +81,8 @@ struct ViewCallbacks {
   std::function<void()> on_pip, on_fullscreen;
   std::function<void()> on_speed;          // d169：倍速按钮点击（渲染线程切换档位弹层）
   std::function<void()> on_skin;           // d182：顶栏皮肤按钮点击（渲染线程切换皮肤弹层）
+  std::function<void()> on_update;         // v0.6.4 d464：顶栏更新按钮点击（投 UpdateInstall）
+  std::function<void()> on_help;           // v0.6.4 d471：顶栏帮助按钮点击（投 ToggleHelp）
   std::function<void(double)> on_seek;     // 绝对秒（释放/点击时提交）
   std::function<void(float)> on_volume;    // 0..1
   std::function<void(bool)> on_mute;       // true = 静音

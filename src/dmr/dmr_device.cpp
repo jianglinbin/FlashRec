@@ -239,12 +239,15 @@ int DmrDevice::thunk(Upnp_EventType type, const void* event, void* cookie) {
 void DmrDevice::log_discovery(Upnp_EventType type, const void* event) {
   auto* d = static_cast<const UpnpDiscovery*>(event);
   if (!d) return;
-  const char* tag = type == UPNP_DISCOVERY_SEARCH_RESULT
-                        ? "M-SEARCH-RESP"
-                        : type == UPNP_DISCOVERY_ADVERTISEMENT_ALIVE ? "ALIVE" : "BYEBYE";
-  const char* loc = UpnpDiscovery_get_Location_cstr(d);
+  // 以下三者只进 FR_LOG_DEBUG；全项目未定义 SPDLOG_ACTIVE_LEVEL（默认 INFO）时
+  // 该宏编译剔除 ⇒ 变量在 Release 下无人引用。标 maybe_unused 保住调试取证能力。
+  [[maybe_unused]] const char* tag =
+      type == UPNP_DISCOVERY_SEARCH_RESULT
+          ? "M-SEARCH-RESP"
+          : type == UPNP_DISCOVERY_ADVERTISEMENT_ALIVE ? "ALIVE" : "BYEBYE";
+  [[maybe_unused]] const char* loc = UpnpDiscovery_get_Location_cstr(d);
   // M-SEARCH 的 ST 在 ServiceType 字段；其余报文该字段为服务类型
-  const char* st = UpnpDiscovery_get_ServiceType_cstr(d);
+  [[maybe_unused]] const char* st = UpnpDiscovery_get_ServiceType_cstr(d);
   char ip[64];
   addr_to_ip(UpnpDiscovery_get_DestAddr(d), ip, sizeof(ip));
   FR_LOG_DEBUG("[SSDP] {} ip={} st={} location={}", tag, ip, st && *st ? st : "-",

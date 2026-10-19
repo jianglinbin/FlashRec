@@ -59,7 +59,7 @@ void circle_btn(NVGcontext* vg, const Theme& t, float cx, float cy, float d,
 // 按下瞬间锁定归属按钮（press_id），光标拖出热区或本来按在别处 → 不触发。
 // 这样拖进度条 / 音量条滑过其它按钮不会误触（旧实现用「悬停 && 按住」判断，有此缺陷）。
 struct ButtonFx {
-  static constexpr int kMax = 16;
+  static constexpr int kMax = 24;  // v0.6.4 d460：+3 更新弹窗按钮（16 → 24 留余量）
   float hover[kMax] = {};
   float press[kMax] = {};
   int press_id = -1;      // 本次按下锁定的按钮 id（-1 = 无归属）
@@ -131,6 +131,8 @@ void icon_volume_muted(NVGcontext* vg, float cx, float cy, float w, NVGcolor c,
 void icon_pip(NVGcontext* vg, float cx, float cy, float w, NVGcolor c);
 void icon_fullscreen(NVGcontext* vg, float cx, float cy, float w, NVGcolor c);
 void icon_skin(NVGcontext* vg, float cx, float cy, float w, NVGcolor c);  // d182 皮肤按钮（调色盘）
+// v0.6.4 d464：顶栏更新按钮（下载箭头 + 托盘横线）
+void icon_update(NVGcontext* vg, float cx, float cy, float w, NVGcolor c);
 // Windows 三键（右上角方形热区；hover / press 底色 + 图标随按压轻微缩小）
 enum class WinBtn { Min, Max, Close };
 void win_button(NVGcontext* vg, const Theme& t, float x, float y, float w, float h, WinBtn kind,

@@ -47,8 +47,7 @@ enum class StrId : int {
   OsdZoomPrefix,      // 前缀："画面 " / "Zoom "（后接 N%）
   OsdFitPrefix,       // d426：前缀："画面模式：" / "Fit mode: "（后接 FitMode* 模式名）
 
-  // —— F1 帮助面板（chrome.cpp draw_help）——
-  HelpTitle,        // 快捷键（F1 关闭）
+  // —— F1 帮助面板（chrome.cpp draw_help；d472 起标题由 软件名+版本-帮助面板 拼装）——
   HelpPlayPause,    // 播放 / 暂停
   HelpVolume,       // 音量 + / -
   HelpMute,         // 静音切换
@@ -114,6 +113,56 @@ enum class StrId : int {
   TrayReloadSkin,     // 重载皮肤
   TrayQuit,           // 退出
   TrayTooltip,        // 托盘悬停提示（FlashRec 投屏接收 / FlashRec Cast Receiver）
+
+  // —— 自动更新 · 托盘入口（v0.6.4 d459；标签随 UpdateService 快照实时变化）——
+  UpdTrayCheck,           // 检查更新
+  UpdTrayChecking,        // 正在检查更新…（禁用）
+  UpdTrayDownloadingFmt,  // "正在下载更新 {}%"（后接进度；禁用）
+  UpdTrayDownloadFmt,     // "下载更新 v{}"（ManualOnly 待确认下载）
+  UpdTrayReadyFmt,        // "安装更新 v{}"（下载校验完成）
+  UpdTrayInstalling,      // 正在安装更新…（禁用）
+  UpdTrayUpToDate,        // 已是最新版本（本次手动检查后短暂显示）
+  UpdTopBtnLabel,         // v0.6.4 d464：顶栏更新按钮悬停文字（更新软件）
+  HelpTopBtnLabel,        // v0.6.4 d471：顶栏帮助按钮悬停文字（帮助）
+
+  // —— 自动更新 · 弹窗（v0.6.4 d460；ui/views/update_dialog.cpp）——
+  UpdDlgTitleAvailableFmt,  // "发现新版本 v{}" / "Update v{} available"
+  UpdDlgTitleChecking,      // 正在检查更新
+  UpdDlgTitleDownloading,   // 正在下载更新
+  UpdDlgTitleUpToDate,      // 已是最新版本（弹窗标题）
+  UpdDlgTitleSkipped,       // 已跳过此版本
+  UpdDlgTitleFailed,        // 更新失败
+  UpdDlgTitleInstalling,    // 正在安装更新
+  UpdDlgVersionFmt,         // "{} → {}"（当前 → 新）
+  UpdDlgSizeFmt,            // "安装包 {}"
+  UpdDlgNotesTitle,         // 更新说明
+  UpdDlgProgressFmt,        // "已下载 {}%"
+  UpdDlgReadyHint,          // 下载完成，校验通过
+  UpdDlgManualHint,         // 自动下载已关闭，可手动下载
+  UpdDlgNoAssetHint,        // 当前形态无安装包，前往发布页
+  UpdDlgPortableHint,       // 便携版：打开文件夹手动替换
+  UpdDlgDebHint,            // 系统包：用软件中心/文件管理器安装
+  UpdDlgDevHint,            // 开发构建不提供自动安装
+  UpdDlgCastWarning,        // 更新会中断当前投屏
+  UpdDlgInstallingHint,     // 正在退出并安装
+  UpdDlgErrorFmt,           // "{}，请稍后重试。"（占位 = 错误类别）
+  UpdBtnInstall,            // 立即安装
+  UpdBtnInstallRestart,     // 立即更新并重启（AppImage）
+  UpdBtnInstallAnyway,      // 仍要安装（投屏二次确认后）
+  UpdBtnDownload,           // 下载更新
+  UpdBtnLater,              // 稍后
+  UpdBtnSkip,               // 跳过此版本
+  UpdBtnRetry,              // 重试
+  UpdBtnOpenFolder,         // 打开下载文件夹（便携 ZIP）
+  UpdBtnOpenFolderDeb,      // 打开所在文件夹（deb）
+  UpdBtnOpenPage,           // 打开发布页（开发构建/无资产）
+  UpdBtnClose,              // 关闭
+  UpdErrNetwork,            // 网络不可用
+  UpdErrVerify,             // 安装包校验失败
+  UpdErrDisk,               // 磁盘空间或写入失败
+  UpdErrPermission,         // 没有写入权限
+  UpdErrInstall,            // 安装程序启动失败
+  UpdErrUnknown,            // 未知错误
 
   // —— 待机（empty_state.cpp）——
   EmptyBadge,    // 投屏接收端（顶栏徽标）

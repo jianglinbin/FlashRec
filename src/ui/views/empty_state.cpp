@@ -34,6 +34,8 @@ void draw_empty_state(NVGcontext* vg, const Theme& t, float w, float h,
     }
     draw_win_buttons(vg, t, w, in, cb, clip);
     draw_skin_button(vg, t, w, in, cb, clip);  // d182：顶栏皮肤按钮
+    draw_update_button(vg, t, w, in, cb, clip);  // d464：更新就绪按钮（皮肤按钮左侧）
+    draw_help_button(vg, t, w, in, cb, clip);  // d471：帮助按钮（右侧按钮簇最左位）
   }
 
   // —— 中央：设备名 + 引导文案 ——
