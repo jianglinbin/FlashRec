@@ -126,6 +126,7 @@ class MpvBridge {
   void set_volume(int vol);  // 0-100
   void set_mute(bool m);
   void set_speed(double s);  // d169：倍速（mpv speed 属性；1.0 = 原速）
+  void apply_live_buffer_cap(bool on);  // ★d479：DLNA 直播缓冲水位（钉死/还原默认）
   // d184：视频填充 —— cover=1（短边填满/居中/裁切，不变型无空白）/ contain=0（留黑边）
   void set_panscan(double p);
   // ★d425：画面填充「拉伸」档本体 —— mpv `keepaspect`（no = 无视宽高比拉满输出

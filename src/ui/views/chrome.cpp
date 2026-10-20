@@ -448,7 +448,9 @@ void draw_bottom_bar(NVGcontext* vg, const Theme& t, float w, float h,
   //  （积压>阈值自动加速消费、追平回 1.0，见 player_controller），用户档位与
   //  控制器冲突。DLNA 不受影响（d169 语义不变）。AirPlay→DLNA 切换时本门控
   //  每帧按 snap.source 重算 ⇒ 按钮自动恢复可用。
-  const bool speed_forbidden = snap.source == CastSource::AirPlay;
+  // ★d479：DLNA 直播流同禁用户倍速（倍速权归窄带追赶控制器，与 AirPlay 同口径）
+  const bool speed_forbidden = snap.source == CastSource::AirPlay ||
+                               (snap.source == CastSource::Dlna && snap.is_live);
   {
     BtnState st = button_hit(in.btns, kBtnSpeed, hit.speed,
                              media_enabled && !speed_forbidden, in.down, in.dt, t);

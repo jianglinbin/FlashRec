@@ -65,10 +65,12 @@ void PlayerController::tick(double now) {
   //   客户端编码与网络。判断依据：
   //     积压 ≈ 起播缺口且不再涨 → 起播一次性损失（追帧/提前起播可解）
   //     积压随流长度持续爬升     → 接收端某处真积压（配合 cache-dur 细分）
-  if (live_start_wall_ > 0.0 && now >= live_probe_next_) {
+  // ★d479：门控扩展 —— 回环探针（live_start_wall_）与 DLNA 直播遥测（dl_probe_）
+  //   共用采样计时与断流判据，输出分流（见下方 dl_probe_ 早退分支）。
+  if ((live_start_wall_ > 0.0 || dl_probe_) && now >= live_probe_next_) {
     const bool transitional = snap_.state == TransportState::Transitioning;
     live_probe_next_ = now + (transitional ? 0.25 : 1.0);
-    const double elapsed = now - live_start_wall_;
+    const double elapsed = live_start_wall_ > 0.0 ? now - live_start_wall_ : 0.0;
     const double pos = snap_.position;
     char posbuf[32];
     if (pos >= 0.0) snprintf(posbuf, sizeof(posbuf), "%.3f", pos);
@@ -77,16 +79,41 @@ void PlayerController::tick(double now) {
     //   ⇒ 「接收端积压」会线性涨到几十秒，**那是记账假象、不是延迟**（d299 定性）。
     //   判据：apts 连续 3 次采样不动（≤0.001s）且 eof 未到 ⇒ 已无数据流入。
     //   此时**停打积压**并明确输出「已断流」，避免后人拿它当延迟证据。
+    //   ★d479 补充：paused-for-cache=yes（HLS 缓冲中）不算断流 —— 分片拉取期
+    //   apts 冻结是常态，3s 缓冲不该误判成断流停测。
     const double apts_now = std::atof(mpv_->get_prop("audio-pts").c_str());
     const bool frozen_apts = live_probe_last_apts_ >= 0.0 &&
                              std::fabs(apts_now - live_probe_last_apts_) <= 0.001;
-    live_probe_stall_ = frozen_apts ? live_probe_stall_ + 1 : 0;
+    // ★d492：用户暂停（pause=yes）时 apts 冻结是**合法状态**，不得计入断流——
+    //   d491 复测实证：手机端暂停 3s ⇒ 断流判定误触发 ⇒ dl_probe_ 停测且本会话
+    //   无人复位（file_loaded 才再置位）⇒ 暂停过一次遥测全程失明。pause 期间
+    //   stall 计数清零；真正的客户端断流（pause=no 而 apts 冻结）判据不变。
+    const bool user_paused = mpv_->get_prop("pause") == "yes";
+    live_probe_stall_ = (frozen_apts && !user_paused) ? live_probe_stall_ + 1 : 0;
     live_probe_last_apts_ = apts_now;
-    const bool stream_dead = live_probe_stall_ >= 3 && std::string(mpv_->get_prop("eof-reached")) != "yes";
+    const bool buffering =
+        mpv_->get_prop("paused-for-cache") == "yes";  // ★d479：HLS 拉片缓冲中
+    const bool stream_dead =
+        live_probe_stall_ >= 3 && std::string(mpv_->get_prop("eof-reached")) != "yes" &&
+        !buffering;
     if (stream_dead) {
       FR_LOG_INFO("[MPV] 延迟探针: 已断流（apts 连续 {}s 未推进，eof未到）—— 停止累计积压"
                   "（此前的『接收端积压』是记账假象，不是延迟）", live_probe_stall_);
       live_start_wall_ = 0.0;  // 复位，下次会话重新起算（d299）
+      dl_probe_ = false;       // ★d479：DLNA 遥测同停，重连成功后 file_loaded 再置位
+      return;
+    }
+    // ★d479：DLNA 直播瘦身遥测（早退，不落入回环分解）。「流经过 − time-pos」
+    //   墙钟差对 HLS 无物理意义（PTS 起点任意，与墙钟不对齐），只打可信量：
+    //   B = demuxer-cache-time − time-pos ≈ 距直播边缘延迟（预读顶到边缘时）。
+    if (dl_probe_) {
+      const double demux_pos = std::atof(mpv_->get_prop("demuxer-cache-time").c_str());
+      const double b = (demux_pos > 0.0 && pos >= 0.0) ? (demux_pos - pos) : -1.0;
+      FR_LOG_INFO("[MPV] DLNA直播遥测: B={:.3f}s cache-dur={} core-idle={} pause={} "
+                  "vfps={} apts={:.3f} hwdec={} 追赶={:.2f}x",
+                  b, mpv_->get_prop("demuxer-cache-duration"), mpv_->get_prop("core-idle"),
+                  mpv_->get_prop("pause"), mpv_->get_prop("estimated-vf-fps"),
+                  apts_now, mpv_->get_prop("hwdec-current"), dl_catchup_speed_);
       return;
     }
     // ★d302 延迟分解：把「数据侧」与「显示侧」的差直接打出来，替代只能推算的
@@ -186,6 +213,81 @@ void PlayerController::tick(double now) {
       FR_LOG_INFO("[MPV] 追赶控制器: 积压 {:.2f}s → 倍速 {:.2f}x{}", backlog,
                   target, target > catchup_speed_ ? "（追赶）" : "（已追平）");
       catchup_speed_ = target;
+    }
+  }
+
+  // ★d490：DLNA 直播复判——WeChat HLS 连接瞬间片单可能极短（实测 0.8045s 且
+  //   seekable ⇒ 首判误 VOD）。宽限 5s 后重查一次，任何「边缘仍在推进」的证据
+  //   （时长增长 / 播放越过初始时长 / 缓冲越过初始片单 / 不可 seek）即翻案接管。
+  //   未在 Playing 则不消费，待恢复播放后再判；on_file_loaded（新文件）重置挂起。
+  if (live_recheck_at_ > 0.0 && now >= live_recheck_at_ &&
+      snap_.state == TransportState::Playing && snap_.source == CastSource::Dlna) {
+    live_recheck_at_ = -1.0;  // 只判一次
+    const double dur = mpv_->get_duration();
+    const bool seekable = mpv_->get_seekable();
+    const double cache_dur = std::atof(mpv_->get_prop("demuxer-cache-duration").c_str());
+    const bool grew = dur > live_recheck_dur0_ + 1.0;              // 时长仍在长
+    const bool past = snap_.position > live_recheck_dur0_ + 0.5;   // 播过初始时长
+    const bool bufover = cache_dur > live_recheck_dur0_ + 1.0;     // 缓冲越过片单
+    if (!seekable || grew || past || bufover) {
+      engage_dlna_live("复判：初始片单短，直播边缘在推进");
+    }
+  }
+
+  // ★d479：DLNA 直播窄带追赶控制器（行业口径：hls.js maxLiveSyncPlaybackRate /
+  //   dash.js liveCatchup.playbackRate）。与上方回环控制器平行互斥（source 门控
+  //   分账），判据同源 B = demuxer-cache-time − time-pos。阈值 d491 复判修正
+  //   （方案 A 内收敛，d489 的 4.0s 水位实证失效：readahead ≥ 分片时长后字节顶
+  //   4MiB 接管 ≈10.4s@3.2Mbps，带顶漂出可控范围）——分片整片入缓 ⇒ B 稳态必锯齿
+  //   （水位 2.0 带顶 ≈ 恢复点+一个分片 ≈4.2s），**唯一无抖动驻留 = 排水到带底后
+  //   整带落回门限之下**，即「驻留条件 exit + 分片 < enter」：
+  //     1.00×：B ≤ 4.8s（带顶 4.3 = 退出点 1.0 + 分片 3.3 之上 0.5s 余量）
+  //     1.10×：B > 4.8s（窄带软追赶——仅启动排水/包络上移时出现，稳态静默）
+  //     1.25×：B > 10s（兜底档——若稳态常驻 = 水位选项未生效，回查不是调参）
+  //     退出滞回：追赶中 B ≤ 1.0s 回 1.00×（1.0 + 3.3 = 4.3 < 4.8 ⇒ 排水到位后
+  //     锯齿整带 [~0.5↔4.3] 落入门限之下，控制器静默驻留，均值 ~2.4s）
+  //     防追崩（dash.js playbackBufferMin 等价）：cache-dur < 1.0s 不加速——
+  //     缓冲太薄时加速只会制造下一次卡顿。
+  //   采样 200ms 与回环控制器同口径。倍速权归控制器：直播会话内用户 SetSpeed
+  //   被 handle_speed 忽略、UI 倍速按钮灰显（d479 同批）。
+  if (now >= dl_catchup_next_ && snap_.state == TransportState::Playing &&
+      snap_.source == CastSource::Dlna && snap_.is_live) {
+    dl_catchup_next_ = now + 0.2;
+    const double demux_pos = std::atof(mpv_->get_prop("demuxer-cache-time").c_str());
+    const double cache_dur = std::atof(mpv_->get_prop("demuxer-cache-duration").c_str());
+    const double b = (demux_pos > 0.0 && snap_.position >= 0.0)
+                         ? (demux_pos - snap_.position)
+                         : 0.0;
+    constexpr double kEnterTh = 4.8;  // 进入软追赶（带顶 4.3 之上，d491 修正）
+    constexpr double kEscTh = 10.0;   // 兜底档（水位钉死失效信号）
+    constexpr double kExitTh = 1.0;   // 排水到带底（1.0+3.3=4.3 < 4.8 驻留条件，d491）
+    constexpr double kBufMin = 1.0;   // 缓冲下限：太薄不加速（防追崩）
+    const bool buf_ok = cache_dur >= kBufMin;
+    double target;
+    if (dl_catchup_speed_ > 1.0) {
+      if (b <= kExitTh || !buf_ok)
+        target = 1.0;
+      else if (dl_catchup_speed_ > 1.10)
+        // ★d493：1.25x 档退出滞回 1.0s——d491 复测实证启动排水期 B 在 esc=10
+        //   边界反复穿越（10.16→1.25 / 9.96→1.10 每 1-2s 翻一次），档间抖动。
+        target = (b > kEscTh - 1.0) ? 1.25 : 1.10;
+      else if (b > kEscTh && buf_ok)
+        target = 1.25;
+      else
+        target = 1.10;
+    } else {
+      if (b > kEscTh && buf_ok)
+        target = 1.25;
+      else if (b > kEnterTh && buf_ok)
+        target = 1.10;
+      else
+        target = 1.0;
+    }
+    if (target != dl_catchup_speed_) {
+      mpv_->set_speed(target);
+      FR_LOG_INFO("[MPV] DLNA直播追赶: B {:.2f}s → 倍速 {:.2f}x{}", b, target,
+                  target > dl_catchup_speed_ ? "（追赶）" : "（已贴水位）");
+      dl_catchup_speed_ = target;
     }
   }
 
@@ -460,6 +562,7 @@ void PlayerController::clear_session(const char* why) {
   snap_ = PlaybackSnapshot{};  // 全部清零回 Idle（新 SetURI 或超时，R5）
   stop_at_ = 0;
   pending_.clear();
+  dl_probe_ = false;  // ★d479：DLNA 直播遥测随会话终止（防停止后 apts 冻结被误报断流）
   mpv_->set_pause(true);
   publish_media();
   publish_state(why);
@@ -583,6 +686,7 @@ void PlayerController::handle_set_uri(const DmrCommand& c, double now) {
   //   控制器接管（控制器仅在回环 Playing 期驱动，此处归零其状态基准）。
   mpv_->set_speed(snap_.speed);
   catchup_speed_ = 1.0;
+  dl_catchup_speed_ = 1.0;  // ★d479：DLNA 窄带追赶档位同步归零（file_loaded 再按 isLive 接管）
   // ★d279 端到端延迟探针锚点：load_format 非空 = AirPlay 回流（DLNA 点播不设，
   //   与 mpv_bridge.cpp 的 P1 低延迟选项门控同一判据）。用 mono_now() 取值，
   //   与 on_property 里的采样点**同一时钟**，不依赖 tick 参数来源。
@@ -778,6 +882,13 @@ void PlayerController::handle_speed(const DmrCommand& c, double now) {
                 c.req_id, c.speed);
     return;
   }
+  // ★d479：DLNA 直播流同口径 —— 倍速权归窄带追赶控制器（直播无用户倍速，
+  //   行业口径；UI 按钮已灰显，此处兜底 SOAP 控制点路径）。
+  if (snap_.source == CastSource::Dlna && snap_.is_live) {
+    FR_LOG_INFO("[DMR] [req#{}] SetSpeed {:.2f}x 忽略（DLNA 直播倍速由追赶控制器接管）",
+                c.req_id, c.speed);
+    return;
+  }
   // d169：本地倍速（控制栏选择）。夹到 [0.25, 4.0]；倍速是 mpv 全局属性，
   // 跨 loadfile / 后端重载保持，无需在文件加载后重设。
   double s = c.speed;
@@ -833,6 +944,26 @@ void PlayerController::on_file_loaded(double now) {
   snap_.is_live = (!seekable || dur <= 0);
   snap_.seekable = seekable;
   snap_.duration = snap_.is_live ? 0.0 : dur;  // R6：TrackDuration 恒 0
+  // ★d479：DLNA 直播低延迟三件套（水位钉死 + 遥测 + 窄带追赶）的判定锚点。
+  //   is_live 此刻才可判 ⇒ 缓冲水位只能运行时下发。直播 = 钉死水位 + 遥测置位 +
+  //   倍速归 1.0（直播无用户倍速，倍速权归追赶控制器，行业口径）；
+  //   其余（点播/回环）恒还原默认 —— 回环有 per-file 选项集不受影响，这里只保证
+  //   上一场直播的水位不泄漏进本场。
+  //   ★d490 复判挂起：WeChat HLS 连接瞬间片单可能极短（d488 复测实证 0.8045s 且
+  //   seekable ⇒ 首判误 VOD、三件套全部未接管）。仅 DLNA 且 0 < dur ≤ 5s 才挂；
+  //   宽限 5s 后在 tick 重查（见 live_recheck 块），点播不受影响。
+  dl_probe_ = false;
+  live_recheck_at_ = -1.0;
+  if (snap_.is_live && snap_.source == CastSource::Dlna) {
+    engage_dlna_live("isLive 判定");
+  } else {
+    mpv_->apply_live_buffer_cap(false);
+    if (snap_.source == CastSource::Dlna && dur > 0.0 && dur <= 5.0) {
+      live_recheck_dur0_ = dur;
+      live_recheck_at_ = mono_now() + 5.0;
+      FR_LOG_INFO("[MPV] DLNA 直播复判挂起: dur={:.3f}s ≤5s，宽限 5s 后重查", dur);
+    }
+  }
   snap_.picture_ready = true;
   snap_.position = 0;
   bool auto_play = cfg_.dlna_auto_play_on_set_uri;  // R1：默认自动开播
@@ -863,6 +994,26 @@ void PlayerController::on_file_loaded(double now) {
   FR_LOG_INFO("[DMR] mpv 轨信息: {}", mpv_->diag_snapshot());
   run_pending_after_load();
   (void)now;
+}
+
+// ★d490：DLNA 直播三件套接管（水位钉死 + 遥测置位 + 倍速归 1.0）。
+//   on_file_loaded 首判（isLive=true）与 tick 复判（初始片单极短误判 VOD 后翻案）
+//   共用此唯一进入路径，保证两条路径的置位集合完全一致。
+void PlayerController::engage_dlna_live(const char* why) {
+  snap_.is_live = true;
+  snap_.duration = 0.0;  // R6：TrackDuration 恒 0
+  dl_probe_ = true;
+  mpv_->apply_live_buffer_cap(true);
+  // 倍速无条件归 1.0：SetUri 已按用户档恢复过 speed，排队期用户点过倍速的
+  // 情况也在此时压回（排队的 SetSpeed 之后由 handle_speed 的直播忽略兜底）。
+  mpv_->set_speed(1.0);
+  dl_catchup_speed_ = 1.0;
+  live_probe_stall_ = 0;
+  live_probe_last_apts_ = -1.0;
+  const double t0 = mono_now();
+  live_probe_next_ = t0;   // 立刻起测
+  dl_catchup_next_ = t0;
+  FR_LOG_INFO("[MPV] DLNA 直播流：缓冲水位钉死 + 遥测/追赶接管（{}）", why);
 }
 
 void PlayerController::on_end_file(int reason, double now) {

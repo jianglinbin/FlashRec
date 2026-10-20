@@ -214,7 +214,7 @@ log "按 WIN32 安装规则暂存（exe + libmpv-2.dll + assets/）"
 
 log "自检 1/2：内容齐备"
 missing=""
-for f in flashrec.exe libmpv-2.dll assets/default_settings.json \
+for f in flashrec.exe flashrec_swap.exe libmpv-2.dll assets/default_settings.json \
          assets/scpd/AVTransport.xml assets/scpd/RenderingControl.xml \
          assets/scpd/ConnectionManager.xml assets/icons/app_256.png; do
   [ -e "$STAGE/$f" ] || missing="$missing $f"

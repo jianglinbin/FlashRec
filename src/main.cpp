@@ -56,6 +56,7 @@
 #include "player/thumb_preview.h"
 #include "player/url_probe.h"
 #include "update/update_service.h"
+#include "update/verify.h"  // ★d495：便携换装安装前 zip 哈希复核（main→update 合法方向）
 #include "ui/theme.h"
 #include "ui/theme_compare.h"  // d180：逐字段自检（M1）
 #include "ui/views/update_dialog.h"  // v0.6.4 d460：弹窗按钮语义（键盘 Enter 主操作用）
@@ -268,9 +269,15 @@ int main(int argc, char** argv) {
   // 控制台策略（d163）：默认无控制台（GUI 子系统）；带 `--console` 才申请一个。
   // 必须在 init_logger 之前，控制台 sink 才能在构造时拿到有效句柄。
   bool want_console = false;
+  // ★d497 调试开关：--update-version=<版本串> 把更新检测口径的「当前版本」临时
+  // 视作指定值（如 0.6.2），令更新检测对 GitHub 最新版判出升级，用于真机端到端
+  // 自动更新演练。仅影响更新检测口径，UI/帮助面板的真实版本不受影响；未传即正常。
+  std::string fake_update_version;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--console") == 0 || std::strcmp(argv[i], "-c") == 0) {
       want_console = true;
+    } else if (std::strncmp(argv[i], "--update-version=", 17) == 0) {
+      fake_update_version = argv[i] + 17;
     }
   }
   bool have_console = want_console ? console_open() : console_available();
@@ -371,8 +378,14 @@ int main(int argc, char** argv) {
   }
   // v0.6.4 d459：自动更新服务 —— 唯一工作线程，启动后 startup_delay_sec 首查、
   // 此后每 check_interval_hours 一次；网络/哈希/写盘全在该线程，主线程只取快照。
+  // ★d497：--update-version=<版本串> 启动参数生效时打 warning（d498 改参：环境
+  // 变量方案退役——启动参数不依赖会话环境传播，SSH/桌面/快捷键三种拉起方式行为一致）。
+  std::string updater_version =
+      fake_update_version.empty() ? std::string(FLASHREC_VERSION) : fake_update_version;
+  if (!fake_update_version.empty())
+    FR_LOG_WARN("[UPD] 调试开关生效：当前版本视作 {}（--update-version）", updater_version);
   fr::update::UpdateService updater;
-  updater.start(cfg.update, FLASHREC_VERSION, paths::config_file());
+  updater.start(cfg.update, updater_version, paths::config_file());
   // d83：托盘模式下启动即隐窗。先隐再跑 mpv/DMR 初始化（全程不闪现）；
   // 若托盘装载失败，后面恢复显示。渲染循环对隐藏窗口照常工作。
   // d91：全部显隐一律走 window.hide_window()/show_window() 包装 —— 它们负责
@@ -884,15 +897,41 @@ int main(int argc, char** argv) {
       if (upd_snap.release_url[0] != '\0') platform::open_url(upd_snap.release_url);
       return;
     }
-    // 便携 ZIP / deb / 开发树没有可自接力的安装器：只呈现 Ready 弹窗（打开文件夹/发布页），
-    // 绝不能让 launch_update_installer 的"打开目录成功"被当成安装成功而退出主程序。
+    // 自安装分流（★d495/d496 扩展）：Setup 走 Inno 向导；AppImage 走重启助手；
+    // 便携 ZIP 在 exe 目录可写时走自动换装（助手分离进程），deb 在 polkit 环境
+    // 齐备时走提权自动安装（detached shell 助手）；条件不满足回退 Ready 弹窗。
+    const bool portable_auto =
+        upd_shape == platform::InstallShape::WindowsPortable &&
+        platform::portable_swap_supported();
+    const bool deb_auto =
+        upd_shape == platform::InstallShape::LinuxDeb && platform::deb_polkit_supported();
     const bool self_install = upd_shape == platform::InstallShape::WindowsSetup ||
-                              upd_shape == platform::InstallShape::LinuxAppImage;
+                              upd_shape == platform::InstallShape::LinuxAppImage ||
+                              portable_auto || deb_auto;
     if (!self_install) {
       FR_LOG_INFO("[UPD] 形态 {} 无自安装交接，打开 Ready 弹窗",
                   platform::install_shape_name(upd_shape));
       update_open_dialog();
       return;
+    }
+    // ★d495/d496 安装前复核哈希（d473/d474 决议：防下载校验后到安装前的文件窗口
+    // 被换）。main→update 是合法依赖方向，复核放这里而非 platform 层。
+    if ((portable_auto || deb_auto) && upd_snap.asset_sha256[0] != '\0') {
+      std::string hex, err;
+      if (!fr::update::sha256_file(upd_snap.asset_path, &hex, &err) ||
+          hex != upd_snap.asset_sha256) {
+        FR_LOG_WARN("[UPD] 安装前哈希复核失败（{}），回退 Ready 弹窗",
+                    err.empty() ? "mismatch" : err);
+        upd_sticky_error = true;
+        update_ui.stage = UpdateStage::Failed;
+        update_ui.can_retry = true;
+        upd_copy(update_ui.error, sizeof(update_ui.error),
+                 upd_error_text(fr::update::UpdateError::Verify).c_str());
+        update_sync_input();
+        publish_wake();
+        return;
+      }
+      FR_LOG_INFO("[UPD] 安装前哈希复核通过");
     }
     // 投屏中安装：顶栏按钮第一下只打开警告弹窗并切「仍要安装」，第二下才真正交接（计划 §9.2）
     if (update_ui.cast_active && !update_ui.confirm_install) {
@@ -910,7 +949,8 @@ int main(int argc, char** argv) {
     publish_wake();
     FR_LOG_INFO("[UPD] 启动安装/交接：shape={} path={}", platform::install_shape_name(upd_shape),
                 upd_snap.asset_path);
-    if (platform::launch_update_installer(upd_shape, upd_snap.asset_path)) {
+    if (platform::launch_update_installer(upd_shape, upd_snap.asset_path,
+                                          upd_snap.asset_sha256)) {
       FR_LOG_INFO("[UPD] 安装器已启动，退出应用");
       glfwSetWindowShouldClose(window.raw(), GLFW_TRUE);
     } else {
@@ -1276,6 +1316,10 @@ int main(int argc, char** argv) {
   };
   auto play_pause = [&]() {
     PlaybackSnapshot s = bus.snapshot();
+    // ★d478：AirPlay 会话禁用播放/暂停（与底栏 d318 / 右键菜单 d322 同判定——
+    //   直播流单 IDR，暂停后恢复无法回到当前画面）。空格键入口同样过门控：
+    //   被禁用的功能不发命令、不弹 OSD。
+    if (s.source == CastSource::AirPlay) return;
     DmrCommand c;
     c.type = s.state == TransportState::Playing ? DmrCommand::Type::Pause
                                                 : DmrCommand::Type::Play;
@@ -1750,6 +1794,10 @@ int main(int argc, char** argv) {
       }
       case UiIntent::Kind::PlayPause: {
         PlaybackSnapshot s = bus.snapshot();
+        // ★d478：AirPlay 会话禁用（与底栏 d318 / 右键菜单 d322 同判定）。
+        //   入口：舞台单击（三段式立即发/挂起待消歧都会走到这）。被禁用的功能
+        //   不发命令、不弹暂停 OSD —— 意图消费点是所有 UI 入口的统一闸门。
+        if (s.source == CastSource::AirPlay) break;
         DmrCommand c;
         c.type = s.state == TransportState::Playing ? DmrCommand::Type::Pause
                                                     : DmrCommand::Type::Play;
@@ -1874,6 +1922,14 @@ int main(int argc, char** argv) {
         break;
       case UiIntent::Kind::Speed: {
         // d169：倍速选择 —— 落盘 player.speed、下发播放器、OSD 反馈。
+        // ★d479：直播流无用户倍速（DLNA 直播倍速权归窄带追赶控制器，AirPlay
+        //   回流同理）——按 d478 定则被禁用的功能零反馈：不发命令、不落盘、
+        //   不弹 OSD。UI 按钮已灰显，此处兜底经右键/其它入口投递的意图。
+        {
+          const PlaybackSnapshot s = bus.snapshot();
+          if (s.source == CastSource::AirPlay || (s.source == CastSource::Dlna && s.is_live))
+            break;
+        }
         cfg.player_speed = it.value;
         {
           char raw[16];

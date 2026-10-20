@@ -610,6 +610,30 @@ void MpvBridge::set_speed(double s) {
   mpv_set_property(mpv_, "speed", MPV_FORMAT_DOUBLE, &s);
 }
 
+// ★d479：DLNA 直播流缓冲水位钉死（on=true 收紧 / false 还原全局默认）。
+//   行业口径（hls.js maxBufferLength / dash.js liveDelay）：直播的预读量就是纯延迟，
+//   必须钉在目标延迟附近。全局默认 64MiB 下 HLS 预读直冲直播边缘（2026-10-20 微信
+//   直播流真机实证：file-loaded 时已 4.6s 且持续爬升），倍速排空净速率 +0.25s/s
+//   追不过预读回填 ⇒ 手动 1.25x 也追不动——结构性问题，先钉水位再谈追赶。
+//   is_live 在 file-loaded 才可判定 ⇒ 走**运行时属性**下发（demuxer-readahead-secs
+//   / demuxer-max-bytes 均为运行时可变属性）；回环流有 per-file 选项集（cache=no,
+//   readahead=2.0），不受这里的还原影响。
+//   取值（d491 复判修正，用户方案 A 内收敛）：readahead 2.0s —— **必须 < 分片时长
+//   （~3.3s）才能保持约束力**：d488/d480 双场实证 readahead=2.0 时整带 ≈0.5↔4.2s
+//   （顶 = 恢复点 + 一个分片，纯时间量纲、与码率无关）；d489 实证 readahead=4.0
+//   ≥ 分片时长后 lavf 按分片整读越限，4MiB 字节顶接管（≈10.4s@3.2Mbps，随码率
+//   漂移不可控）。max-bytes 4MiB 仅作启动突发硬顶（启动 burst 实测可达 ~10s），
+//   稳态带由 readahead 管辖；配套追赶门限 4.8s 出带（player_controller d491）。
+void MpvBridge::apply_live_buffer_cap(bool on) {
+  if (!mpv_) return;
+  const char* ra = on ? "2.0" : "1.0";     // mpv 默认 demuxer-readahead-secs = 1.0
+  const char* mb = on ? "4MiB" : "64MiB";  // 全局默认 = init 设定的 64MiB
+  mpv_set_property_string(mpv_, "demuxer-readahead-secs", ra);
+  mpv_set_property_string(mpv_, "demuxer-max-bytes", mb);
+  FR_LOG_INFO("[MPV] DLNA直播缓冲水位: readahead={}s max-bytes={}（{}）", ra, mb,
+              on ? "钉死，稳态锯齿带 ≈0.5↔4.2s" : "还原默认");
+}
+
 void MpvBridge::set_panscan(double p) {
   panscan_ = p < 0 ? 0 : (p > 1 ? 1 : p);
   if (mpv_) mpv_set_property(mpv_, "panscan", MPV_FORMAT_DOUBLE, &panscan_);

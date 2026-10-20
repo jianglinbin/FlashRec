@@ -55,6 +55,7 @@ struct UpdateSnapshot {
   char notes[608] = {};
   char asset_name[128] = {};
   char asset_path[520] = {};
+  char asset_sha256[72] = {};  // ★d495：下载产物摘要（清单校验值），便携换装安装前复核用
   long long asset_size = 0;
   long long downloaded = 0;
   long long total = 0;

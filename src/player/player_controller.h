@@ -120,6 +120,9 @@ class PlayerController {
   void on_end_file(int reason, double now);
   void on_property(const MpvEvent& e, double now);
   void run_pending_after_load();
+  // ★d490：DLNA 直播三件套接管（水位钉死 + 遥测置位 + 倍速归 1.0）。
+  //   on_file_loaded 首判与 tick 复判（live_recheck）共用一条进入路径。
+  void engage_dlna_live(const char* why);
 
   // —— 发布 ——
   void publish_state(const char* why);
@@ -152,6 +155,19 @@ class PlayerController {
   double catchup_speed_ = 1.0;
   // ★d323：控制器采样计时（200ms 周期，d322 的 1s 提频）。
   double catchup_next_ = 0.0;
+  // ★d479：DLNA 直播低延迟（遥测 + 水位钉死 + 窄带追赶）。is_live 在 file-loaded
+  //   才可判 ⇒ 遥测/追赶的置位锚点都在 on_file_loaded。与 AirPlay 回环控制器
+  //   （catchup_speed_）平行分账，判据同源（B = demuxer-cache-time − time-pos）
+  //   但阈值分立——回环水位 2.0s 是自产流定值，直播水位 = 钉死的 readahead 2.0s
+  //   （d491 修正：必须 < 分片时长才有约束力，4MiB 仅作启动突发硬顶）。
+  bool dl_probe_ = false;          // DLNA 直播遥测开关（断流/会话结束复位，重连再置位）
+  double dl_catchup_next_ = 0.0;   // 窄带追赶 200ms 采样锚
+  double dl_catchup_speed_ = 1.0;  // 控制器当前倍速（直播会话内倍速权归控制器）
+  // ★d490：直播复判——WeChat HLS 连接瞬间片单可能只有 ~0.8s 素材（d488 复测实证：
+  //   dur=0.8045 且 seekable ⇒ 首判误 VOD，三件套全部未接管）。宽限期后在 tick 重查：
+  //   时长仍在长 / 播放越过初始时长 / 缓冲越过初始片单 ⇒ 补判直播并接管。
+  double live_recheck_at_ = -1.0;   // 复判时刻（<0 = 无待判；on_file_loaded 每场重置）
+  double live_recheck_dur0_ = 0.0;  // file_loaded 时的初始时长（增长判据基准）
   // ★d283 取证：真机报「延迟 10s+」，实测三段已排除生产积压(0.02s)与 demuxer 预读(0.10s)，
   //   但「loadfile → 第一条延迟探针」的 7.58s 无法定性 —— 旧探针只由 time-pos 事件驱动，
   //   而该事件要等 mpv 开播才发，且状态需 file-loaded 才翻 PLAYING，两个未知量（mpv 侧

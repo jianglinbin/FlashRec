@@ -559,6 +559,7 @@ void UpdateService::perform_download() {
     snap_.asset_size = asset_size;
     copy_fixed(snap_.asset_name, asset_name);
     snap_.asset_path[0] = '\0';
+    snap_.asset_sha256[0] = '\0';  // ★d495：新下载开始，清掉上一场的摘要
     snap_.downloaded = 0;
     snap_.total = asset_size;
     snap_.bytes_per_sec = 0.0;
@@ -588,6 +589,7 @@ void UpdateService::perform_download() {
       snap_.error = UpdateError::None;
       snap_.download_available = false;
       copy_fixed(snap_.asset_path, result.file_path);
+      copy_fixed(snap_.asset_sha256, result.sha256);  // ★d495：便携换装安装前复核用
       snap_.downloaded = asset_size;
       snap_.total = asset_size;
       snap_.progress_percent = 100;

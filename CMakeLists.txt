@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 # 版本号是打包的唯一来源（deb 文件名 / CPack 元数据 / .desktop）；改版本先改这里，
 # 且必须与 ledger/INDEX.md 中状态为「进行中」的版本一致。
-project(FlashRec VERSION 0.6.4 LANGUAGES C CXX)
+project(FlashRec VERSION 0.6.5 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -206,6 +206,20 @@ add_custom_command(TARGET flashrec POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/assets $<TARGET_FILE_DIR:flashrec>/assets
   COMMENT "copy assets"
 )
+
+# ---- ★d495：便携版自动换装助手（独立进程，d474 决议落地）----
+# 纯 Win32 C、零第三方依赖；解压用系统 tar.exe。Windows 文件锁语义（运行中 exe
+# 不可删/覆盖）决定便携换装只能由第三方进程在主进程死后完成；Linux 无此锁，
+# 不需要对等物（AppImage=d461 shell 助手 / deb=d473 pkexec）—— 平台分治。
+if (WIN32)
+  add_executable(flashrec_swap WIN32 src/platform/portable_swap_helper.c)
+  target_compile_definitions(flashrec_swap PRIVATE
+    _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(flashrec_swap PRIVATE /utf-8 /W3)
+  target_link_options(flashrec_swap PRIVATE /ENTRY:wmainCRTStartup)
+  target_link_libraries(flashrec_swap PRIVATE shell32)
+  install(TARGETS flashrec_swap RUNTIME DESTINATION .)
+endif()
 
 # ---- 安装布局（d95）----
 # Windows：便携布局 —— exe + dll + assets 同目录，解压即用（install 前缀根）。
