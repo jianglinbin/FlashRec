@@ -200,6 +200,7 @@ class PlayerController {
   double stop_at_ = 0.0;             // STOPPED 时刻（保持期 R5）
   bool pending_stop_ = false;        // EOF 无 NextURI：先 TRANSITIONING 再 STOPPED（R2）
   double seek_pending_ = -1.0;       // 发起中的 seek 目标（R3：确认完成后才刷新位置）
+  double seek_t0_ = -1.0;            // ★d505：seek 发起墙钟（遥测：定位耗时 + 恢复推进耗时）
   int reconnect_left_ = 0;
   double reconnect_at_ = 0.0;        // 指数退避重连时刻（R6）
   double last_reconnect_delay_ = 1.0;  // 上次退避时长（日志用）

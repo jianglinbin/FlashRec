@@ -105,8 +105,8 @@ void draw_update_button(NVGcontext* vg, const Theme& t, float w, ViewInput& in, 
                         const DmgRect* clip = nullptr);
 
 // —— v0.6.4 d471：顶栏「帮助」按钮（右侧按钮簇最左位；复用更新按钮的 pill 形态）——
-// 收起 = ? 图标方块；悬停底板左扩出文字「帮助」。位置随更新按钮联动：
-//   更新可见 → 右缘贴更新按钮展开包络左侧（更新悬停展开时帮助平滑左移让位）；
+// 收起 = ? 图标方块；悬停底板左扩出文字「帮助」。位置随更新按钮联动（d508 修正贴位）：
+//   更新可见 → 右缘紧贴更新按钮收起位（图标左缘-间距；更新悬停展开时帮助平滑左移让位）；
 //   更新不可见 → 右缘顶替皮肤按钮左侧空位（即更新按钮收起时的位置）。
 // upd_hover 传当前帧 in.btns.hover[kBtnUpdateTop]（命中/绘制/归因同源）。
 UpdateBtnGeom help_button_geom(NVGcontext* vg, const Theme& t, float win_w,
@@ -158,6 +158,8 @@ void draw_osd(NVGcontext* vg, const Theme& t, float w, float h, const PlaybackSn
 // 独立于 ButtonFx/BtnId：菜单条目命中用自管下标，不占用按钮槽
 //（kMax=16 已被 10 个 BtnId 占用，菜单再挂进去就爆了）。
 enum class CtxAction {
+  // ★d501：播放控制条目（PlayPause/Prev/Next/Stop）已从右键菜单撤除——播放控制走
+  // 底栏按钮/空格键/媒体键；枚举值照 LanguageMenu（d421）先例保留不删。
   None, PlayPause, Prev, Next, Stop, ToggleFullscreen, Pip,
   // d146 R5：三项信息徽章合并为一项；R2：新增投屏自动全屏（两项均勾选 + R1 持久化）。
   // 旧 ShowInfo/ShowVideoFps/ShowUiFps 已废弃（台账记"已废弃"，编号不删）。
@@ -203,7 +205,8 @@ struct PopupArea {
 // ys[] 为条目在面板内的相对 y；面板位置由弹出锚点（右键按下点）+ 越界回夹决定。
 struct CtxMenuLayout {
   // d438：条目容量唯一真值 —— render_loop 的条目数组按它开，布局循环按它填。
-  // 满员 18（上/下一集 + 四个子菜单父条目），24 留余量；三处必须同源。
+  // 满员 14（四个子菜单父条目 + 窗口模式「退出」；d501 撤播放控制条目后自 18 降），
+  // 24 留余量；三处必须同源。
   static constexpr int kMaxItems = 24;
   float x = 0, y = 0, w = 0, h = 0;   // 面板矩形（窗口坐标）
   float item_h = 0, sep_h = 0, pad_y = 0;

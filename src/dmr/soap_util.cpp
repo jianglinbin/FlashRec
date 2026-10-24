@@ -79,8 +79,13 @@ SoapResult handle_avtransport(const std::string& action, const SoapArgs& args,
       r.error_msg = "Live stream is not seekable";
       return r;
     }
+    // d503：TRANSITIONING 放行（规格 §2「排队暂存」）——旧实现回 701 与 handle_seek
+    // 的排队路径矛盾（d502 实证：SetURI 后 0ms 的 Seek 吃 701、2s 后同一报文成功；
+    // 窗口 = 主线程命令消费延迟 ~18ms + 加载期 ~272ms，双段）。IDLE/STOPPED 维持 701：
+    // IDLE 无会话文件；STOPPED 按 GetCurrentTransportActions 宣告只有 Play（保持期
+    // 定位目前走本地 UI 路径，SOAP 面不放开）。
     if (snap.state != S::Playing && snap.state != S::PausedPlayback &&
-        snap.state != S::Ready) {
+        snap.state != S::Ready && snap.state != S::Transitioning) {
       r.ok = false;
       r.error_code = kErrInvalidTransition;
       r.error_msg = "Transition not available";
@@ -136,8 +141,8 @@ SoapResult handle_avtransport(const std::string& action, const SoapArgs& args,
     // SPEC §1.13：按当前态回**真实支持集**，控制点据此决定控件可用性（缺了这个动作，
     // 控制点按 SCPD 建表时找不到，直接当作"设备没有传输控制能力"）。名单与真实行为严格对齐
     // （player_controller 的合法性判定 + 本文件 Seek 的前置条件）：
-    //   IDLE→空（只能 SetURI）；TRANSITIONING→Play/Pause/Stop（三者入队，file-loaded 后按序执行；
-    //   Seek 在 Transitioning 会被本层直接判 701，故不列）；STOPPED→Play（保持期内按当前位置重推）；
+    //   IDLE→空（只能 SetURI）；TRANSITIONING→Play/Pause/Stop/Seek（四者排队暂存，file-loaded
+    //   后按序执行——Seek 放行见上方 d503）；STOPPED→Play（保持期内按当前位置重推）；
     //   READY→Play/Seek；PLAYING→Pause/Stop/Seek；PAUSED_PLAYBACK→Play/Stop/Seek。
     // 有下一集才追加 Next；Previous/Record 永不列入（前者明确回 710、后者未实现）。
     if (!need({"InstanceID"})) return r;
@@ -152,6 +157,7 @@ SoapResult handle_avtransport(const std::string& action, const SoapArgs& args,
         add("Play");
         add("Pause");
         add("Stop");
+        if (can_seek) add("Seek");  // d503：Seek 放行 TRANSITIONING（排队暂存）
         break;
       case S::Stopped:
         if (snap.has_session) add("Play");

@@ -36,6 +36,10 @@ bool MpvBridge::init() {
   mpv_set_option_string(mpv_, "osc", "no");
   mpv_set_option_string(mpv_, "audio-display", "no");
   mpv_set_option_string(mpv_, "demuxer-max-bytes", "64MiB");
+  // d505：cache 恢复播放的等待从默认 1.0s 降 0.3s——seek（及网络抖动）重填缓冲
+  // 后少等 0.7s 出画面。代价：极弱网下恢复后更易再次触发 cache-pause（机制不变，
+  // 只是恢复阈值更低）。
+  mpv_set_option_string(mpv_, "cache-pause-wait", "0.3");
   // ★d283 取证开关：真机 loadfile→file-loaded 空档 7.577s，期间主线程正常 tick、
   //   mpv 只读到流时间 0.267s —— 离线 vo=null 复现不出（同选项 0.01s 就绪），
   //   只能让 mpv 自己把这段时间讲了。FR_MPV_TRACE=1 抬 msg-level 并放开日志级别。
@@ -586,9 +590,16 @@ void MpvBridge::seek_abs(double sec) {
   if (!mpv_) return;
   char t[40];
   snprintf(t, sizeof(t), "%.3f", sec);
-  const char* cmd[] = {"seek", t, "absolute", "exact", nullptr};
+  // d505：网络流（http/https）用关键帧对齐，本地文件保留 exact——exact 要求从
+  // 关键帧逐帧解码追到目标点，网络流上还叠加中段 Range 重拉，体感跳转 1~3s；
+  // 关键帧对齐 demuxer 定位完成即出画面（落点 ±GOP ≈2~5s 偏差，拖进度条与
+  // DLNA Seek 语义均可接受）。回环流 tcp:// 不匹配 http 前缀走 exact，但直播
+  // 流本就被 R6 禁 seek，实际不可达。
+  const bool network = cur_uri_.rfind("http://", 0) == 0 ||
+                       cur_uri_.rfind("https://", 0) == 0;
+  const char* cmd[] = {"seek", t, "absolute", network ? nullptr : "exact", nullptr};
   int rc = mpv_command(mpv_, cmd);
-  FR_LOG_INFO("[MPV] seek {} rc={}", t, rc);
+  FR_LOG_INFO("[MPV] seek {} rc={} {}", t, rc, network ? "(keyframe)" : "(exact)");
 }
 
 void MpvBridge::set_volume(int vol) {

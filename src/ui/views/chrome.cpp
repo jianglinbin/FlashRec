@@ -229,9 +229,12 @@ UpdateBtnGeom help_button_geom(NVGcontext* vg, const Theme& t, float win_w,
   UpdateBtnGeom g;
   g.h = L.topBarH;
   g.y = 0;
-  // 更新可见：右缘 = 更新展开包络左缘 - 间距（展开动画进行中帮助随 upd_hover 平滑左移）；
-  // 更新不可见：直接顶替更新按钮收起位（皮肤按钮左侧）。
-  g.right = upd_visible ? (ub.x - L.skinBtnGap) : ub.right;
+  // 更新可见：右缘贴更新按钮**收起位**（图标方块左缘）- 间距（紧贴图标；更新悬停
+  //   展开时由下方 upd_hover 项平滑左移让位）——d508 修正：原实现贴"展开包络左缘"
+  //  （ub.x），更新可见期间帮助常驻让出悬停展开宽度的空隙（用户观察「帮助被挤开到
+  //   悬停状态的宽度」），且与下方动态让位叠加成双重让位。
+  // 更新不可见：直接顶替更新按钮收起位（图标落位与收起位重合，右缘 = 皮肤按钮左侧 - 间距）。
+  g.right = upd_visible ? (ub.right - ub.base_w - L.skinBtnGap) : ub.right;
   g.base_w = L.skinBtnSize;
   const float label_w = text_width(vg, L.titleFont, tr(i18n::StrId::HelpTopBtnLabel));
   g.pill_w = L.skinBtnGap + label_w + L.skinBtnGap + L.skinBtnSize;

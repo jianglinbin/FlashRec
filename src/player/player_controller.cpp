@@ -849,6 +849,7 @@ void PlayerController::handle_seek(const DmrCommand& c, double now) {
     return;
   }
   seek_pending_ = target;
+  seek_t0_ = now;  // ★d505：Seek 遥测锚点（seeking=false 打定位耗时，首个 time-pos 打恢复耗时）
   (void)now;
   mpv_->seek_abs(target);
   // R3：位置以 seeking=false 确认为准（见 on_property），发起时不刷新缓存
@@ -1077,12 +1078,22 @@ void PlayerController::on_property(const MpvEvent& e, double now) {
     }
     // R3：seek 期间不刷位置缓存（等 seeking=false 确认），否则进度条来回弹
     if (seek_pending_ >= 0) return;
+    // ★d505：seek 发起后的首个 time-pos = 位置恢复推进（画面恢复的近似上界）
+    if (seek_t0_ > 0.0) {
+      FR_LOG_INFO("[MPV] Seek 恢复推进：发起→位置推进共 {:.0f}ms（含定位段）",
+                  (mono_now() - seek_t0_) * 1000.0);
+      seek_t0_ = -1.0;
+    }
     snap_.position = e.num;
     publish_position(false);
   } else if (e.prop_name == "seeking") {
     if (seek_pending_ >= 0 && e.flag == 0) {
       // R3：seeking=false = seek 确认完成，刷新位置并立即发布
       snap_.position = seek_pending_;
+      // ★d505：demuxer 定位耗时（网络流关键帧对齐后此段应显著短于 exact 时代）
+      if (seek_t0_ > 0.0)
+        FR_LOG_INFO("[MPV] Seek 定位耗时 {:.0f}ms（目标 {}）", (mono_now() - seek_t0_) * 1000.0,
+                    format_hms_seconds(seek_pending_));
       FR_LOG_INFO("[DMR] [req#-] Seek 完成确认 pos={}", format_hms_seconds(seek_pending_));
       seek_pending_ = -1;
       publish_position(true);

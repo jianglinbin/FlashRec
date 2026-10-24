@@ -1347,6 +1347,7 @@ void RenderLoop::frame(double now) {
   // 的 ys[24]/sep[24] 成对扩容，两处必须同改）。
   // v0.6.1 d347：二级子菜单（「窗口大小」）——子条目表/布局与主菜单同帧重算，
   // 状态成员见 render_loop.h（ctx_sub_*）；关闭点统一走成员 close_ctx_sub()。
+  // d501：撤播放控制条目后主菜单满员 14（窗口模式含「退出」+ 尾分隔线），24 余量更宽。
   CtxMenuItem ctx_items[CtxMenuLayout::kMaxItems];
   int ctx_n = 0;
   CtxMenuLayout ctx_lay;
@@ -1374,22 +1375,12 @@ void RenderLoop::frame(double now) {
       popup_area = PopupArea{edge, edge, (float)w - edge, (float)h - edge};
   }
   if (ctx_open_) {
-    const bool media = snap.has_session;
-    // ★d322：AirPlay 会话禁用「播放 / 暂停」条目（直播流不支持暂停，与底栏同判定）
-    const bool pause_ok = media && snap.source != CastSource::AirPlay;
     auto add = [&](const char* label, CtxAction a, bool en, bool chk = false,
                    bool checked = false) { ctx_items[ctx_n++] = {label, a, en, chk, checked}; };
-    // v0.6.2 d362：全部条目标签走 i18n（语言子菜单见下方 d362 块）
-    add(tr(i18n::StrId::CtxPlayPause), CtxAction::PlayPause, pause_ok);
-    // d158：与底栏同判定 —— 无上/下一集数据（next_uri 空）时不给这两个条目
-    //（菜单每帧重建，数据到来/消失即随之增减，布局与命中同帧自洽）。
-    if (!snap.next_uri.empty()) {
-      add(tr(i18n::StrId::CtxPrev), CtxAction::Prev, media);
-      add(tr(i18n::StrId::CtxNext), CtxAction::Next, media);
-    }
-    add(nullptr, CtxAction::None, false);
-    // d159：全屏项随状态改标签（全屏中 = "退出全屏"）；"退出"（关应用）只在窗口模式给，
-    // 全屏下该位置换成"停止" —— 全屏看不到标题栏关闭键，全屏菜单里放关应用项易误触。
+    // ★d501：播放控制条目（播放/暂停、上/下一集、停止）整体撤出右键菜单——播放控制
+    // 已有底栏按钮/空格键/媒体键覆盖，菜单只留窗口与画面类项。枚举与文案键照
+    // LanguageMenu（d421）先例保留不删。
+    // d159：全屏项随状态改标签（全屏中 = "退出全屏"）。
     add(in.fullscreen ? tr(i18n::StrId::CtxExitFullscreen) : tr(i18n::StrId::CtxFullscreen),
         CtxAction::ToggleFullscreen, true);
     add(tr(i18n::StrId::CtxPip), CtxAction::Pip, true);
@@ -1429,11 +1420,12 @@ void RenderLoop::frame(double now) {
     // 真值 = player.fit_mode 持久偏好，勾选 = fit_mode_ 镜像）。
     ctx_items[ctx_n++] = {tr(i18n::StrId::CtxFitMode), CtxAction::FitModeMenu, true,
                           false, false, true};
-    add(nullptr, CtxAction::None, false);
-    if (in.fullscreen)
-      add(tr(i18n::StrId::CtxStop), CtxAction::Stop, media);
-    else
+    // d501：全屏位原是「停止」（d159），随播放控制条目一并撤出；「退出」（关应用）仍
+    // 只在窗口模式给（d159 防误触：全屏看不到标题栏关闭键），全屏下菜单至此结束。
+    if (!in.fullscreen) {
+      add(nullptr, CtxAction::None, false);
       add(tr(i18n::StrId::CtxExit), CtxAction::Close, true);
+    }
     ctx_lay = ctx_menu_layout(nvg_.ctx(), theme_, popup_area, ctx_items, ctx_n,
                               ctx_anchor_x_, ctx_anchor_y_);
     ctx_hover = ctx_lay.item_at(in.mx, in.my);
@@ -1597,13 +1589,10 @@ void RenderLoop::frame(double now) {
   //     点菜单外/划出条目再松手 = 只关菜单不动作）——
   if (ctx_open_) {
     auto ctx_activate = [&](int idx) {
-      // 禁用条目（无媒体会话的播放/暂停/上下集）：不动作，只收菜单（标准菜单语义）
+      // 禁用条目：不动作，只收菜单（标准菜单语义；d501 撤播放控制后当前无禁用项，
+      // 语义保留给未来条目）
       if (!ctx_items[idx].enabled) return;
       switch (ctx_items[idx].action) {
-        case CtxAction::PlayPause: channel_.post_intent({UiIntent::Kind::PlayPause}); break;
-        case CtxAction::Prev: channel_.post_intent({UiIntent::Kind::Prev}); break;
-        case CtxAction::Next: channel_.post_intent({UiIntent::Kind::Next}); break;
-        case CtxAction::Stop: channel_.post_intent({UiIntent::Kind::Stop}); break;  // d159
         case CtxAction::ToggleFullscreen:
           channel_.post_intent({UiIntent::Kind::ToggleFullscreen});
           break;

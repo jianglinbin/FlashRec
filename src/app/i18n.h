@@ -70,9 +70,9 @@ enum class StrId : int {
   HelpKeysReset,     // Ctrl+中键
 
   // —— 右键菜单（render_loop.cpp 每帧重建）——
-  CtxPlayPause,     // 播放 / 暂停
-  CtxPrev,          // 上一个
-  CtxNext,          // 下一个
+  CtxPlayPause,     // 播放 / 暂停（d501 撤出右键菜单，键与枚举保留）
+  CtxPrev,          // 上一个（d501 同上撤除）
+  CtxNext,          // 下一个（d501 同上撤除）
   CtxFullscreen,    // 全屏
   CtxExitFullscreen,  // 退出全屏
   CtxPip,           // 画中画
@@ -90,7 +90,7 @@ enum class StrId : int {
   CtxVideoZoom,     // 画面缩放（子菜单父条目；子条目为纯数字档位不翻译）
   CtxFitMode,       // d426：画面填充（子菜单父条目；子条目 = FitMode* 模式名）
   CtxLanguage,      // 语言（子菜单父条目）
-  CtxStop,          // 停止
+  CtxStop,          // 停止（d501 撤出右键菜单，键与枚举保留）
   CtxExit,          // 退出
 
   // —— 画面填充模式名（d426；右键「画面填充」子菜单条目 + OSD kind7 共用）——
