@@ -6,6 +6,28 @@
 
 #include <atomic>
 
+// ★平台头一律放在 namespace 之外（d517 教训：Linux CI 实锤——头文件裹进
+// namespace 会把 std 污染成 fr::platform::std，typeinfo/thread 满屏崩；
+// MSVC 恰好容忍导致本机漏网）。Windows 顺序铁律：winsock2 → ws2tcpip →
+// windows → iphlpapi（iphlpapi 抢先会拉起没有基础类型的 nldef.h，C2059 满屏）。
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <iphlpapi.h>
+#else  // __linux__
+#include <cerrno>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netdb.h>
+#include <poll.h>
+#include <thread>
+#include <unistd.h>
+
+#include <linux/netlink.h>
+#include <sys/socket.h>
+#endif
+
 namespace fr::platform {
 namespace {
 std::atomic<bool> g_dirty{false};
@@ -13,13 +35,6 @@ std::atomic<bool> g_running{false};
 }  // namespace
 
 #ifdef _WIN32
-
-// 顺序铁律：winsock2 → ws2tcpip → windows → iphlpapi（iphlpapi 抢先会拉起
-// 没有基础类型的 nldef.h，C2059 满屏）。
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
-#include <iphlpapi.h>
 
 namespace {
 
@@ -85,17 +100,6 @@ std::vector<std::pair<std::string, std::string>> net_watch_list_interfaces() {
 }
 
 #else  // __linux__
-
-#include <cerrno>
-#include <ifaddrs.h>
-#include <net/if.h>
-#include <netdb.h>
-#include <poll.h>
-#include <thread>
-#include <unistd.h>
-
-#include <linux/netlink.h>
-#include <sys/socket.h>
 
 namespace {
 
