@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include <linux/netlink.h>
+#include <linux/rtnetlink.h>  // RTMGRP_LINK / RTMGRP_*_IFADDR（d518：netlink.h 不含这些宏）
 #include <sys/socket.h>
 #endif
 
