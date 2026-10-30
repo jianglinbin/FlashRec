@@ -2,6 +2,8 @@
 
 #include "cast/cast_contract.h"  // cast 合同常量（本文件现仅注释引用；保留防漂移）
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -497,6 +499,35 @@ void MpvBridge::load_uri(const std::string& uri, double start_sec,
       FR_LOG_WARN("[MPV] FR_LIVE_OPTS 覆盖回流 per-file 选项: {}", ov);
     }
   }
+  // ★d512：DLNA HLS 直播（m3u8）收窄 lavf 探测窗 —— 起播提速。
+  //   取证（2026-10-30 微信直播真机日志 req#108）：loadfile → file-loaded **9.36s**，
+  //   同期百度 mp4 点播仅 0.4~0.6s。机理：mp4 有 moov 索引秒过探测；HLS 直播无索引，
+  //   lavf 默认探测窗（analyzeduration ~10s / probesize ~5MB 量级）只能靠实际拉片解码
+  //   凑 —— 微信分片 ~3.3s/片（d488 实测）⇒ 凑满探测窗要 2~3 个整片 ≈ 6.6~10s 媒体
+  //   数据，正好对上 9.4s（file-loaded 时 demuxer-cache-time 已 5.28s ≥ 2 片）。
+  //   h264+aac 组合 1s / 1MB 足以建轨（d279c 同方向实验：probesize=200000,
+  //   analyzeduration=1 → 起播 <0.5s；探测窗是**字节闸门**，不是时间闸门）。
+  //   is_live 在 open 期还判不了 ⇒ 只能按 URI 形状判定，".m3u8" 是唯一稳定特征
+  //  （微信/央视频直播 URL 均是）。仅 per-file 下发，无属性残留，点播 mp4 不受影响。
+  //   ★验收红线（AIRPLAY_NOTES 教训，d287）：探测窗截断可能弄坏首帧 IDR/编解码
+  //   参数 —— 真机必须复验起播画面与音画；预期 file-loaded 提前到 ~2s 量级、
+  //   file-loaded 时 demuxer-cache-time < 3.3s（不足一个分片）。
+  {
+    std::string uri_low = clean;
+    std::transform(uri_low.begin(), uri_low.end(), uri_low.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (load_format.empty() && uri_low.find(".m3u8") != std::string::npos) {
+      if (!opts.empty()) opts += ",";
+      opts += "demuxer-lavf-analyzeduration=1.0,demuxer-lavf-probesize=1000000";
+      FR_LOG_INFO("[MPV] HLS 直播收窄探测窗: analyzeduration=1.0 probesize=1MB（起播提速）");
+      // 诊断通道：追加项覆盖同名缺省（A/B 不重编）。
+      if (const char* ov = std::getenv("FR_HLS_OPTS"); ov != nullptr && *ov != '\0') {
+        opts += ",";
+        opts += ov;
+        FR_LOG_WARN("[MPV] FR_HLS_OPTS 追加覆盖 HLS per-file 选项: {}", ov);
+      }
+    }
+  }
   if (!opts.empty()) {
     cmd.push_back("0");
     cmd.push_back(opts);
@@ -619,30 +650,6 @@ void MpvBridge::set_speed(double s) {
   if (s < 0.25) s = 0.25;
   if (s > 4.0) s = 4.0;
   mpv_set_property(mpv_, "speed", MPV_FORMAT_DOUBLE, &s);
-}
-
-// ★d479：DLNA 直播流缓冲水位钉死（on=true 收紧 / false 还原全局默认）。
-//   行业口径（hls.js maxBufferLength / dash.js liveDelay）：直播的预读量就是纯延迟，
-//   必须钉在目标延迟附近。全局默认 64MiB 下 HLS 预读直冲直播边缘（2026-10-20 微信
-//   直播流真机实证：file-loaded 时已 4.6s 且持续爬升），倍速排空净速率 +0.25s/s
-//   追不过预读回填 ⇒ 手动 1.25x 也追不动——结构性问题，先钉水位再谈追赶。
-//   is_live 在 file-loaded 才可判定 ⇒ 走**运行时属性**下发（demuxer-readahead-secs
-//   / demuxer-max-bytes 均为运行时可变属性）；回环流有 per-file 选项集（cache=no,
-//   readahead=2.0），不受这里的还原影响。
-//   取值（d491 复判修正，用户方案 A 内收敛）：readahead 2.0s —— **必须 < 分片时长
-//   （~3.3s）才能保持约束力**：d488/d480 双场实证 readahead=2.0 时整带 ≈0.5↔4.2s
-//   （顶 = 恢复点 + 一个分片，纯时间量纲、与码率无关）；d489 实证 readahead=4.0
-//   ≥ 分片时长后 lavf 按分片整读越限，4MiB 字节顶接管（≈10.4s@3.2Mbps，随码率
-//   漂移不可控）。max-bytes 4MiB 仅作启动突发硬顶（启动 burst 实测可达 ~10s），
-//   稳态带由 readahead 管辖；配套追赶门限 4.8s 出带（player_controller d491）。
-void MpvBridge::apply_live_buffer_cap(bool on) {
-  if (!mpv_) return;
-  const char* ra = on ? "2.0" : "1.0";     // mpv 默认 demuxer-readahead-secs = 1.0
-  const char* mb = on ? "4MiB" : "64MiB";  // 全局默认 = init 设定的 64MiB
-  mpv_set_property_string(mpv_, "demuxer-readahead-secs", ra);
-  mpv_set_property_string(mpv_, "demuxer-max-bytes", mb);
-  FR_LOG_INFO("[MPV] DLNA直播缓冲水位: readahead={}s max-bytes={}（{}）", ra, mb,
-              on ? "钉死，稳态锯齿带 ≈0.5↔4.2s" : "还原默认");
 }
 
 void MpvBridge::set_panscan(double p) {

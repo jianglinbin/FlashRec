@@ -42,6 +42,7 @@
 #include "cast/airplay/airplay_source.h"  // v0.6.0：AirPlay 门面（d269 M0 装配）
 #endif
 #include "platform/net_if.h"   // 多网卡（d110）：启动打印候选接口
+#include "platform/net_watch.h"  // ★d510：网络变化被动监听（自愈触发源）
 #include "platform/autostart.h"  // d437：托盘「开机启动」
 #include "platform/clipboard.h"
 #include "platform/console.h"  // 运行时控制台（--console）+ UTF-8（d163）
@@ -503,6 +504,60 @@ int main(int argc, char** argv) {
   }
 #endif
   keep_awake::set(true);
+
+  // —— 网络自愈（★d510）——
+  // 背景：协议栈此前只在启动时碰一次运气，启动时无网（或某网段没起）就永远
+  // 起不来。现在三路触发：① 系统事件（net_watch 被动监听）② 60s 低频轮询兜底
+  //（watcher 失效/事件遗漏）③ 投屏会话结束补做。统一 2s 防抖 + 接口快照对比，
+  // 快照没变不动作（VPN/虚拟网卡抖动不拆栈）；会话中暂缓重建，结束后自动补。
+  // 粒度 = 每张网卡的 ip+name 集：任一网段（如 192.168.1.x）后恢复都会被
+  // 快照差异捕捉，与「哪张先起」无关。探测走 net_watch_list_interfaces
+  //（无副作用）—— fr_net_if_scan 会覆写共享全局列表，pupnp 线程并发读会撕裂。
+  auto net_fingerprint = [] {
+    auto ifs = platform::net_watch_list_interfaces();
+    std::sort(ifs.begin(), ifs.end());
+    ifs.erase(std::unique(ifs.begin(), ifs.end()), ifs.end());  // 单网卡多地址行去重
+    std::string fp = std::to_string(ifs.size());
+    for (const auto& if_pair : ifs) {
+      fp += "|";
+      fp += if_pair.first;
+      fp += ",";
+      fp += if_pair.second;
+    }
+    return fp;
+  };
+  auto net_rebuild = [&] {
+    // 已启动的栈整栈重建（LOCATION/组播绑死旧接口集）；没启动的补启
+    //（启动时无网的场景，网络恢复事件正好补上这一脚）。
+    const bool dmr_was = dmr.started();
+    if (dmr_was) dmr.stop();
+    if (dmr.start()) {
+      FR_LOG_INFO("[APP] DMR {}（网络自愈）",
+                  dmr_was ? "已按新接口集重新上线" : "启动成功（网络恢复）");
+    } else {
+      FR_LOG_WARN("[APP] DMR {}失败，等待下次网络事件再试", dmr_was ? "重建" : "启动");
+    }
+#ifdef FR_AIRPLAY
+    const bool ap_was = airplay.running();
+    if (ap_was) airplay.stop();
+    if (airplay.start()) {
+      FR_LOG_INFO("[APP] AirPlay {}（网络自愈）",
+                  ap_was ? "已按新接口集重新上线" : "启动成功（网络恢复）");
+    } else {
+      FR_LOG_WARN("[APP] AirPlay {}失败，等待下次网络事件再试", ap_was ? "重建" : "启动");
+    }
+#endif
+  };
+  std::string net_fp = net_fingerprint();
+  if (platform::net_watch_start()) {
+    FR_LOG_INFO("[APP] 网络变化监听已启动（接口快照基线 {} 接口）", net_fp);
+  } else {
+    FR_LOG_WARN("[APP] 网络变化监听不可用，仅靠 60s 轮询兜底");
+  }
+  bool net_dirty = false;        // 有未处理的变化（事件/轮询共用一盏灯）
+  double net_dirty_at = 0.0;     // 置脏时刻（2s 防抖窗起点）
+  double net_poll_at = mono_now() + 60.0;  // 兜底轮询下一次触发时刻
+  bool net_pending = false;      // 会话中暂缓的重建（has_session 清零后补做）
 
   // —— 跨线程通道 + 渲染线程 ——
   ViewStateChannel channel;
@@ -1922,13 +1977,12 @@ int main(int argc, char** argv) {
         break;
       case UiIntent::Kind::Speed: {
         // d169：倍速选择 —— 落盘 player.speed、下发播放器、OSD 反馈。
-        // ★d479：直播流无用户倍速（DLNA 直播倍速权归窄带追赶控制器，AirPlay
-        //   回流同理）——按 d478 定则被禁用的功能零反馈：不发命令、不落盘、
-        //   不弹 OSD。UI 按钮已灰显，此处兜底经右键/其它入口投递的意图。
+        // ★d322/d478：AirPlay 回流倍速由追赶控制器接管 —— 按 d478 定则被禁用的
+        //   功能零反馈：不发命令、不落盘、不弹 OSD。UI 按钮已灰显，此处兜底经
+        //   右键/其它入口投递的意图。（d479 的 DLNA 直播门控随控制器一并撤除。）
         {
           const PlaybackSnapshot s = bus.snapshot();
-          if (s.source == CastSource::AirPlay || (s.source == CastSource::Dlna && s.is_live))
-            break;
+          if (s.source == CastSource::AirPlay) break;
         }
         cfg.player_speed = it.value;
         {
@@ -2460,6 +2514,36 @@ int main(int argc, char** argv) {
       }
     }
 #endif
+    // 3.7) 网络自愈（★d510）：变化置脏 → 2s 防抖合并 → 快照对比 → 变了才动。
+    //      60s 轮询兜底与系统事件共用同一盏脏灯；防抖窗内后续事件免费并入。
+    if (platform::net_watch_consume() || now >= net_poll_at) {
+      if (now >= net_poll_at) net_poll_at = now + 60.0;
+      if (!net_dirty) {
+        net_dirty = true;
+        net_dirty_at = now;
+      }
+    }
+    if (net_dirty && now - net_dirty_at >= 2.0) {
+      net_dirty = false;
+      const std::string fp = net_fingerprint();
+      if (fp != net_fp) {
+        FR_LOG_INFO("[APP] 网络接口快照变化：{} → {}", net_fp, fp);
+        net_fp = fp;
+        if (bus.snapshot().has_session) {
+          // 投屏会话中不拆栈（GENA 订阅/SSDP 在场会被整栈重建打断）；
+          // 会话结束（含网络断导致的自然停止）下一帧自动补做。
+          net_pending = true;
+          FR_LOG_INFO("[APP] 投屏会话进行中，协议栈重建暂缓到会话结束");
+        } else {
+          net_rebuild();
+        }
+      }
+    }
+    if (net_pending && !bus.snapshot().has_session) {
+      net_pending = false;
+      FR_LOG_INFO("[APP] 会话已结束，执行暂缓的协议栈重建");
+      net_rebuild();
+    }
     // 4) 窗口事件（模态循环会在此阻塞，但渲染线程不受影响）
     window.poll_events();
     tray::poll();  // d81：Linux 托盘图标窗口 X 事件（Win 空操作）
@@ -2702,6 +2786,7 @@ int main(int argc, char** argv) {
   player.shutdown();
   // d459：先取消更新网络/下载并 join（.part 保留），再关日志。
   updater.stop();
+  platform::net_watch_stop();  // ★d510：回收网络监听线程/句柄
   window.destroy();
   FR_LOG_INFO("[APP] 退出");
   shutdown_logger();

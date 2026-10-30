@@ -19,8 +19,10 @@ class DmrDevice {
   DmrDevice(EventBus& bus, const Config& cfg);
   ~DmrDevice();
 
-  bool start();  // UpnpInit2 + 注册设备 + 广播；失败返回 false
+  bool start();  // UpnpInit2 + 注册设备 + 广播；失败返回 false（内部已回滚，可重试）
   void stop();
+  // ★d510：网络自愈需要 —— 主循环据此区分「未启动（补启）」与「已启动（重建）」。
+  bool started() const { return started_; }
   // 主线程每帧：消费 PlayerEvent → 差量 GENA NOTIFY（状态类立即，位置类不推）
   void tick();
 

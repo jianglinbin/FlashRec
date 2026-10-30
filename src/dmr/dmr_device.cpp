@@ -159,7 +159,13 @@ bool DmrDevice::start() {
   int port = static_cast<int>(UpnpGetServerPort());
   FR_LOG_INFO("[SSDP] 协议栈就绪 ip={} port={}", ip ? ip : "?", port);
 
-  if (!load_scpd_assets()) return false;
+  if (!load_scpd_assets()) {
+    // ★d510：中途失败必须回滚已初始化的协议栈 —— 否则重试时 UpnpInit2 撞
+    // 「已初始化」错误，网络自愈的重试路径永远走不通。
+    FR_LOG_ERROR("[DMR] SCPD 装载失败（回滚协议栈，等待重试）");
+    UpnpFinish();
+    return false;
+  }
   build_device_xml(ip, port);
   // 描述别名兜底：部分控制点（如百度 DumediaDLNA）投屏中途会按拼出的路径
   // 重拉设备描述确认能力（实测 2026-09-15 GET /fr/device.xml 404 后放弃调 SetVolume）。
@@ -179,7 +185,8 @@ bool DmrDevice::start() {
                                static_cast<int>(desc_xml_.size()), 1, &DmrDevice::thunk, this,
                                &handle_);
   if (rc != UPNP_E_SUCCESS) {
-    FR_LOG_ERROR("[DMR] UpnpRegisterRootDevice2 失败 rc={}", rc);
+    FR_LOG_ERROR("[DMR] UpnpRegisterRootDevice2 失败 rc={}（回滚协议栈，等待重试）", rc);
+    UpnpFinish();  // ★d510：同上，重试前置条件是干净栈
     return false;
   }
   rc = UpnpSendAdvertisement(handle_, kMaxAgeSec);

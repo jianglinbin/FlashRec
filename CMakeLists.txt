@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 # 版本号是打包的唯一来源（deb 文件名 / CPack 元数据 / .desktop）；改版本先改这里，
 # 且必须与 ledger/INDEX.md 中状态为「进行中」的版本一致。
-project(FlashRec VERSION 0.6.6 LANGUAGES C CXX)
+project(FlashRec VERSION 0.6.7 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -69,6 +69,7 @@ set(FR_SOURCES
   src/platform/autostart.cpp  # 开机启动（d437）：Win Run 键 / Linux XDG autostart
   src/platform/window_glfw.cpp
   src/platform/net_if.c   # 多网卡（d109）：接口枚举 / 按对端选本机 IP（也被 upnp_static 编译一份）
+  src/platform/net_watch.cpp  # ★d510：网络变化被动监听（Win NotifyIpInterfaceChange / Linux netlink）
   third_party/nanovg/src/nanovg.c
 )
 if (WIN32)
