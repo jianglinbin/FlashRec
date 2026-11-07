@@ -50,9 +50,9 @@ DEFAULT_DESCRIPTION = (
     "手机投屏电脑：DLNA 推送 + AirPlay 镜像，无线投屏接收端")
 DEFAULT_HOMEPAGE = "https://github.com/jianglinbin/FlashRec/releases"
 DEFAULT_TOPICS = [
-    "dlna", "upnp", "dlna-mediarenderer", "airplay", "airplay-receiver",
+    "dlna", "upnp", "dlna-mediarenderer", "dmr", "airplay", "airplay-receiver",
     "airplay-mirroring", "screen-mirroring", "screen-casting", "screencast",
-    "cast-receiver", "dlna-receiver", "media-renderer", "wireless-display",
+    "cast-receiver", "dlna-receiver", "media-renderer",
     "windows", "linux", "cpp", "cpp20", "mpv", "glfw", "nanovg",
 ]
 

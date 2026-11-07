@@ -77,7 +77,11 @@ bool acquire() {
   std::string path = getenv("XDG_RUNTIME_DIR") ? std::string(getenv("XDG_RUNTIME_DIR"))
                                                : std::string("/tmp");
   path += "/flashrec.lock";
-  g_lock = open(path.c_str(), O_CREAT | O_RDWR, 0666);
+  // ★d527：O_CLOEXEC 必加 —— 否则锁 fd 经 fork+exec 泄漏进更新助手（spawn_detached
+  //   的 detached shell → pkexec → apt），flock 挂在共享 open file description 上，
+  //   旧应用退出后锁仍被助手持有；助手装完 exec 拉起新版，新版 flock 撞自己助手的
+  //   继承 fd 被误判「已有实例」秒退（2026-11-08 真机实锤：deb 更新完成后应用不拉起）。
+  g_lock = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
   if (g_lock < 0) return true;  // 锁失败不拦运行
   if (flock(g_lock, LOCK_EX | LOCK_NB) != 0) {
     FR_LOG_INFO("[APP] 已有 FlashRec 实例在运行");

@@ -1381,7 +1381,9 @@ int main(int argc, char** argv) {
     // ★d478：AirPlay 会话禁用播放/暂停（与底栏 d318 / 右键菜单 d322 同判定——
     //   直播流单 IDR，暂停后恢复无法回到当前画面）。空格键入口同样过门控：
     //   被禁用的功能不发命令、不弹 OSD。
-    if (s.source == CastSource::AirPlay) return;
+    // ★d526：无会话（Idle）同样不动作不弹 OSD —— Play 在 Idle 属非法（SOAP 层回
+    //   701，handle_play 落警告分支），空格键却仍弹「播放」OSD，用户误解为已开始播放。
+    if (s.source == CastSource::AirPlay || !s.has_session) return;
     DmrCommand c;
     c.type = s.state == TransportState::Playing ? DmrCommand::Type::Pause
                                                 : DmrCommand::Type::Play;
@@ -1859,7 +1861,8 @@ int main(int argc, char** argv) {
         // ★d478：AirPlay 会话禁用（与底栏 d318 / 右键菜单 d322 同判定）。
         //   入口：舞台单击（三段式立即发/挂起待消歧都会走到这）。被禁用的功能
         //   不发命令、不弹暂停 OSD —— 意图消费点是所有 UI 入口的统一闸门。
-        if (s.source == CastSource::AirPlay) break;
+        // ★d526：无会话（待机态舞台单击 / 空格键）同样静默 —— 与空格键入口同判定。
+        if (s.source == CastSource::AirPlay || !s.has_session) break;
         DmrCommand c;
         c.type = s.state == TransportState::Playing ? DmrCommand::Type::Pause
                                                     : DmrCommand::Type::Play;
