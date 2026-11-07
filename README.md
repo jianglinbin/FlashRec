@@ -4,13 +4,11 @@
 
 [![build-packages](https://github.com/jianglinbin/FlashRec/actions/workflows/release.yml/badge.svg)](https://github.com/jianglinbin/FlashRec/actions/workflows/release.yml)
 
-局域网投屏接收端 —— DLNA / UPnP（DMR）与 AirPlay 双协议，把手机上的视频或整块屏幕投到电脑上播放。
+局域网投屏接收端 —— 把手机上的视频或整块屏幕无线投到电脑上播放的免费开源软件。支持
+DLNA / UPnP（DMR）推送与 AirPlay 隔空播放双协议：iPhone / iPad / Mac 走系统「屏幕镜像」
+即连即投，安卓手机与各类 App 走 DLNA 投屏，电脑这边装好即接收。
 
 C++20 + 自绘 UI（nanovg / GLFW），Windows 与 Linux 一等公民。
-
-> 关键词：手机投屏电脑 · 手机投屏到电脑 · 电脑投屏接收 · 投屏接收端 · 投屏接收器 · 无线投屏 · 屏幕镜像 · 隔空播放 · DLNA 投屏 · DLNA 接收 · DLNA 渲染器 · 视频投屏 · 免费开源投屏软件
->
-> Keywords: DLNA receiver · UPnP AVTransport renderer · AirPlay receiver · AirPlay screen mirroring for Windows & Linux · cast phone to PC · mirror iPhone / Android screen to computer · watch phone video on PC · open-source casting receiver
 
 ## 界面预览
 
@@ -38,8 +36,9 @@ C++20 + 自绘 UI（nanovg / GLFW），Windows 与 Linux 一等公民。
 - **音画同步**：以音频为主钟的时基方案，真机实测 `a−v = 0.000s`；起播延迟 7.577s →
   **0.100s**，稳态接收积压 0.57~0.60s 持续不增长。
 - **双协议并存**：AirPlay 与 DLNA 常驻监听，任意新投屏自动接管（后到即最新内容）。
-- **标准 DLNA DMR**：AVTransport / RenderingControl / ConnectionManager 三服务齐全，
-  手机系统投屏、bilibili、腾讯视频等支持 DLNA 的 App 可直接发现并投屏。
+- **标准 DLNA DMR（数字媒体渲染器）**：AVTransport / RenderingControl / ConnectionManager
+  三服务齐全，手机系统投屏、bilibili、腾讯视频等支持 DLNA 的 App 可直接发现并把视频
+  投屏到电脑。
 - **多网卡正确**：「谁问就按谁回」—— M-SEARCH / SOAP / GENA 按对端所在网段回复，
   ALIVE / BYEBYE 每块网卡各发一份，URLBase 按请求 Host 头生成。多网卡机器不再出现
   「投屏成功但连不上」。
@@ -183,10 +182,6 @@ Linux：`$XDG_DATA_HOME/FlashRec/settings.json` 或 `~/.local/share/FlashRec/set
 事件总线通信；`cast/` 同样只经事件总线投递指令、数据面走本机回环 TCP 喂 mpv；平台宏
 只准出现在 `src/platform/`；播放状态机的唯一真值在 `src/player/player_controller`；
 视觉 token 只写在 `Theme` 结构体，绘制代码零字面量色值。
-
-## 说明
-
-本仓库只包含源码与构建资产。开发过程记录（版本台账、规划文档）未随本仓库公开。
 
 ## 许可
 

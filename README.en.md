@@ -4,19 +4,12 @@
 
 [![build-packages](https://github.com/jianglinbin/FlashRec/actions/workflows/release.yml/badge.svg)](https://github.com/jianglinbin/FlashRec/actions/workflows/release.yml)
 
-A LAN cast-receiver — DLNA / UPnP (DMR) and AirPlay in one app: cast video or your
-entire screen from a phone to the PC and play it there.
+A free and open-source LAN cast receiver for Windows and Linux — DLNA / UPnP (DMR)
+and AirPlay in one app: mirror your whole phone screen (iPhone, iPad, Mac) with one
+tap, or cast videos from any DLNA app on the phone, and play them on the PC.
 
 C++20 with a fully self-drawn UI (nanovg / GLFW); Windows and Linux are both
 first-class citizens.
-
-> Keywords: DLNA receiver · UPnP AVTransport renderer · AirPlay receiver ·
-> AirPlay screen mirroring for Windows & Linux · cast phone to PC · mirror
-> iPhone / Android screen to computer · watch phone video on PC · open-source
-> casting receiver
->
-> 关键词：手机投屏电脑 · 手机投屏到电脑 · 电脑投屏接收 · 投屏接收端 · 无线投屏 ·
-> 屏幕镜像 · 隔空播放 · DLNA 投屏 · DLNA 接收 · 视频投屏 · 免费开源投屏软件
 
 ## UI Preview
 
@@ -230,11 +223,6 @@ local loopback TCP data path; platform macros are allowed only in
 `src/platform/`; the playback state machine's single source of truth is
 `src/player/player_controller`; visual tokens live only in the `Theme` struct —
 zero literal colors in drawing code.
-
-## Notes
-
-This repository contains source code and build assets only. Development logs
-(version ledger, planning documents) are not published here.
 
 ## License
 
