@@ -33,7 +33,8 @@ struct UpdateUi {
   char current[32] = {};         // 当前版本号
   char size[24] = {};            // 安装包大小（已格式化）
   char error[192] = {};          // 失败原因（主线程取 i18n 后填入）
-  char notes[608] = {};          // 更新说明（纯文本，最多 8 行）
+  char notes_zh[1536] = {};      // 更新说明·中文（纯文本，弹窗最多 8 行；d519）
+  char notes_en[1536] = {};      // 更新说明·英文（缺省空 = 按界面语言回退中文；d519）
 };
 
 }  // namespace fr

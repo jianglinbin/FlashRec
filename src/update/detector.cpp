@@ -314,6 +314,7 @@ DetectionResult detect_update(const UpdateConfig& cfg, const std::string& curren
       if (built && has_downloadable_asset(fallback)) {
         result.latest_version = fallback.version;
         result.notes = fallback.notes;
+        result.notes_en = fallback.notes_en;
         if (!fallback.release_url.empty()) result.release_url = fallback.release_url;
         result.manifest = std::move(fallback);
         result.download_endpoints = std::move(fallback_endpoints);
@@ -323,6 +324,7 @@ DetectionResult detect_update(const UpdateConfig& cfg, const std::string& curren
       }
       result.outcome = DetectionOutcome::NotifyOnly;
       result.notes.clear();
+      result.notes_en.clear();
       return result;
     }
     // Atom 兜底：只取版本号，不猜下载地址、不自动下载。
@@ -389,6 +391,7 @@ DetectionResult detect_update(const UpdateConfig& cfg, const std::string& curren
   result.latest_version = authoritative_version;
   result.manifest = manifests[picked.endpoint.id];
   result.notes = result.manifest.notes;
+  result.notes_en = result.manifest.notes_en;
   // 清单是权威：它的 release_url 与版本一致，优先于 API 胜者的链接。
   if (!result.manifest.release_url.empty()) result.release_url = result.manifest.release_url;
 

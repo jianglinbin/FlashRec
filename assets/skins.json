@@ -636,6 +636,101 @@
      }
     }
    }
+  },
+  {
+   "id": "ubuntu-orange-square",
+   "name": "暗灰橙·直角",
+   "name[en]": "Graphite Orange Square",
+   "personality": "暗灰橙的直角版本：同色板、同 Ubuntu 橙强调，窗口/进度/圆点/徽标/按钮/菜单/OSD/提示条全部圆角归零",
+   "risk": "直角 + 高饱和橙，浅色画面下进度条对比略高",
+   "shape": {
+    "windowRadius": 0.0,
+    "progressRadius": 0.0,
+    "knobShape": "square",
+    "knobSizeOverride": 12.0,
+    "playButtonShape": "square",
+    "playButtonSizeOverride": 48.0,
+    "playButtonTinted": true
+   },
+   "stage": {
+    "fit": "contain",
+    "inset": 0
+   },
+   "colors": {
+    "topBarBg": "#1f1f1f",
+    "barBg": "rgba(31,31,31,0.92)",
+    "barBorderTopBar": "rgba(0,0,0,0)",
+    "barBorderBottomBar": "rgba(0,0,0,0)",
+    "titleText": "#f2f2f2",
+    "subText": "#b0b0b0",
+    "mutedText": "#b0b0b0",
+    "badgeBg": "rgba(233,84,32,0.16)",
+    "badgeText": "#ff8a5c",
+    "icon": "#dedede",
+    "iconDim": "#b0b0b0",
+    "iconDisabled": "rgba(242,242,242,0.32)",
+    "winIcon": "#b0b0b0",
+    "winHoverBg": "rgba(255,255,255,0.10)",
+    "winPressBg": "rgba(255,255,255,0.18)",
+    "winCloseHoverBg": "#e81123",
+    "winClosePressBg": "#c50f1f",
+    "winCloseHoverIcon": "#ffffff",
+    "btnBg": "rgba(0,0,0,0)",
+    "btnFg": "#f5f5f5",
+    "btnHoverBg": "#3d3d3d",
+    "btnPressBg": "#4a4a4a",
+    "muteIcon": "rgba(242,242,242,0.60)",
+    "muteTrack": "rgba(255,255,255,0.12)",
+    "muteKnob": "rgba(242,242,242,0.50)",
+    "track": "rgba(255,255,255,0.14)",
+    "buffer": "rgba(233,84,32,0.45)",
+    "played": "#e95420",
+    "knob": "#ffffff",
+    "knobHaloDrag": "rgba(233,84,32,0.22)",
+    "chapterTick": "rgba(233,84,32,0.55)",
+    "playButtonBg": "rgba(43,43,43,0.72)",
+    "playButtonBorder": "rgba(233,84,32,0.60)",
+    "playButtonIcon": "#e95420",
+    "previewBg": "#1f1f1f",
+    "previewBorder": "rgba(255,255,255,0.20)",
+    "previewTimeBg": "rgba(31,31,31,0.92)",
+    "previewTimeText": "#f2f2f2",
+    "stageBg": "#23262b",
+    "stageBorder": "rgba(0,0,0,0)",
+    "winBorder": "rgba(0,0,0,0)",
+    "topBarBorder": "rgba(0,0,0,0)",
+    "botBarBorder": "rgba(0,0,0,0)",
+    "stageText": "#f2f2f2",
+    "stageSubText": "#b0b0b0"
+   },
+   "layout": {
+    "border": {
+     "width": 0
+    },
+    "badge": {
+     "radius": 0
+    },
+    "thumbPreview": {
+     "radius": 0
+    },
+    "ctxMenu": {
+     "radius": 0
+    },
+    "osd": {
+     "radius": 0
+    },
+    "promptBar": {
+     "barRadius": 0,
+     "btnRadius": 0
+    },
+    "bottomBar": {
+     "button": {
+      "radius": 0,
+      "circle": false,
+      "iconSize": 13
+     }
+    }
+   }
   }
  ],
  "stagePlaceholder": {

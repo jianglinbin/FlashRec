@@ -24,7 +24,8 @@ struct ReleaseManifest {
   std::string version;  // 规范化（无 v 前缀、无构建元数据）
   std::string published_at;
   std::string release_url;
-  std::string notes;    // 纯文本，≤600 字节（UTF-8 边界安全截断）
+  std::string notes;    // 更新说明·中文（纯文本，≤2048 字节，UTF-8 边界安全截断）
+  std::string notes_en; // 更新说明·英文（d519；缺省空 = 清单未携带，显示层回退中文）
   std::string key_id;
   std::string signature;
   ReleaseAsset windows_setup;
@@ -78,5 +79,10 @@ const char* asset_kind_key(AssetKind kind);  // latest.json 里的键名
 
 // UTF-8 安全截断（不切断多字节序列）。
 void truncate_utf8(std::string* s, size_t max_bytes);
+
+// 双语 Release 正文切分（d519）：按「# 开头且含 (English) 的行」分界，前段=中文、
+// 后段=英文（分界标题行本身不进任何一段）；无英文段时 en 为空、zh=全文。
+// 两段各自剥轻量 markdown（行首 "#"+ 空格、行内 "**"）成纯文本。
+void split_bilingual_notes(std::string_view body, std::string* zh, std::string* en);
 
 }  // namespace fr

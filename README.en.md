@@ -10,6 +10,14 @@ entire screen from a phone to the PC and play it there.
 C++20 with a fully self-drawn UI (nanovg / GLFW); Windows and Linux are both
 first-class citizens.
 
+> Keywords: DLNA receiver · UPnP AVTransport renderer · AirPlay receiver ·
+> AirPlay screen mirroring for Windows & Linux · cast phone to PC · mirror
+> iPhone / Android screen to computer · watch phone video on PC · open-source
+> casting receiver
+>
+> 关键词：手机投屏电脑 · 手机投屏到电脑 · 电脑投屏接收 · 投屏接收端 · 无线投屏 ·
+> 屏幕镜像 · 隔空播放 · DLNA 投屏 · DLNA 接收 · 视频投屏 · 免费开源投屏软件
+
 ## UI Preview
 
 Playback UI (frameless + translucent top/bottom bars that auto-hide when idle +
@@ -18,7 +26,7 @@ Ubuntu orange):
 
 ![Playback UI](docs/img/ui-preview.png)
 
-The 7 built-in skins only swap color and corner-radius tokens — the layout is
+The 8 built-in skins only swap color and corner-radius tokens — the layout is
 identical. Drop a custom skin JSON into the user skin directory `skins/` and hit
 "Reload skins" in the tray menu to hot-load it.
 
@@ -55,7 +63,7 @@ all four artifacts + `SHA256SUMS.txt`):
 - **Self-drawn UI**: no native widgets, identical look across platforms and DPI;
   lives in the tray — closing the window minimizes to tray (device stays online),
   real exit via the tray menu.
-- **Skin system**: the whole UI is token-driven JSON (`assets/skins.json`); 7
+- **Skin system**: the whole UI is token-driven JSON (`assets/skins.json`); 8
   built-in skins selected via `ui.skin` in `settings.json`; custom JSON in the
   user skin directory + tray "Reload skins" hot-loads it without a restart.
 - **Smart video fit**: adaptive cover/contain per window/stage aspect — portrait
@@ -69,6 +77,10 @@ all four artifacts + `SHA256SUMS.txt`):
 - **Speed control**: 0.5x–3.0x in 7 presets from the control bar (popup list),
   remembering your last pick; live-stream catch-up consumes buffer at automatic
   faster speed (scaletempo2, pitch preserved).
+- **Automatic updates** (new in v0.6.4): checks for new versions on startup,
+  races direct and proxy endpoints by measured download speed, downloads and
+  verifies silently, then prompts to install. The updater runs on its own
+  worker thread and never blocks playback or casting.
 
 ## Building
 
@@ -134,13 +146,65 @@ menu. AirPlay and DLNA run concurrently — any new cast takes over the session.
 
 Skins: set `ui.skin` in `settings.json` to a built-in skin id (`nord-snow` /
 `nord-frost` / `nord-rose` / `nord-iris` / `nord-night` / `nord-forest` /
-`ubuntu-orange`), or drop your own JSON into the user skin directory and hit
-tray "Reload skins".
+`ubuntu-orange` / `ubuntu-orange-square`), or drop your own JSON into the user skin
+directory and hit tray "Reload skins".
 
 UI language: follows the system UI language by default (`ui.language` in
 `settings.json`, `auto` / `zh-CN` / `en-US`); switch instantly via the
 "Language" submenu in the context menu or the two language entries at the bottom
 of the tray menu — no restart needed.
+
+## Automatic updates
+
+Since v0.6.4 the app updates itself; the updater runs on a dedicated worker
+thread and never blocks playback, casting or the UI:
+
+- **When it checks**: once 30 seconds after startup, then every 4 hours; the
+  tray menu "Check for updates" triggers a manual check. Keys:
+  `update.startup_delay_sec` / `update.check_interval_hours`.
+- **Racing and failover**: the direct GitHub API and every enabled entry in
+  `update.proxies` are raced concurrently; endpoints are ranked by the
+  throughput (B/s) of the **complete API response body**, so direct is not
+  privileged. The winner is reused first, and a second manifest round re-ranks
+  endpoints before an installer download. If everything fails, retries back off
+  through 15 minutes → 1 hour → 6 hours → 24 hours and resume automatically.
+- **Silent download**: a detected update is downloaded in the background; after
+  its SHA-256 verifies, an update icon appears in the title bar (left of the
+  skin button). Hover shows "Update software"; clicking opens the installer and
+  the app exits once the installer has started. No automatic dialog.
+- **Install**: the Windows installer wizard completes the upgrade and relaunches;
+  the portable build opens the download folder for manual replacement; AppImage
+  replaces itself and relaunches after exit; deb opens the containing folder
+  for manual installation.
+- **First updatable release**: the automatic chain starts at v0.6.4. Users on
+  v0.6.3 or older must download v0.6.4 once manually; from then on (v0.6.4 →
+  v0.6.5 and later) updates happen in-app.
+
+Configure proxies in the `update` group of `settings.json` (Windows:
+`%APPDATA%\FlashRec\settings.json`; Linux: `$XDG_DATA_HOME/FlashRec/settings.json`
+or `~/.local/share/FlashRec/settings.json`). `prefix` is prepended to the GitHub
+URL, while `template` substitutes `{url}` (use exactly one of the two);
+`enabled` toggles an entry:
+
+```json
+"update": {
+  "enabled": true,
+  "auto_check": true,
+  "auto_download": true,
+  "direct_enabled": true,
+  "probe": { "timeout_ms": 4000, "concurrency": 4, "cache_sec": 600 },
+  "proxies": [
+    { "name": "gh-proxy", "prefix": "https://gh-proxy.com/", "enabled": true },
+    { "name": "my-mirror", "template": "https://example.com/gh/?url={url}", "enabled": true }
+  ]
+}
+```
+
+`update.api_base` can point at a self-hosted mirror / intranet Releases API
+(HTTPS only); set `update.enabled=false` to turn updates off, or
+`update.auto_download=false` to check without downloading. The updater only
+sends version-check and installer requests — never accounts, tokens or local
+paths.
 
 ## Repository Layout
 

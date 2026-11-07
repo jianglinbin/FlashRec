@@ -114,7 +114,10 @@ bool net_watch_start() {
   if (g_running.exchange(true)) return true;  // 幂等
   g_dirty.store(false, std::memory_order_relaxed);
 
-  const int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+  // SOCK_NONBLOCK：排水 recv 队列排空即返回 EAGAIN，线程始终回到下方 poll()
+  // 检查停止管道。阻塞版会困死在 recv 里 —— 首个 netlink 事件后线程永驻
+  // recv，退出时 join 永久挂死、锁不释放，新实例全被单实例守卫拦掉（d522）。
+  const int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_NONBLOCK, NETLINK_ROUTE);
   if (fd < 0) {
     g_running.store(false, std::memory_order_relaxed);
     return false;

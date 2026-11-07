@@ -648,7 +648,8 @@ void UpdateService::update_manifest_fields(const DetectionResult& result) {
   copy_fixed(snap_.current_version, current_version_);
   copy_fixed(snap_.latest_version, result.latest_version);
   copy_fixed(snap_.release_url, result.release_url);
-  copy_fixed_utf8(snap_.notes, result.notes);
+  copy_fixed_utf8(snap_.notes_zh, result.notes);
+  copy_fixed_utf8(snap_.notes_en, result.notes_en);
   snap_.atom = result.atom;
   snap_.asset_name[0] = '\0';
   snap_.asset_path[0] = '\0';

@@ -15,8 +15,8 @@
 外加两条静态一致性：**SCPD 与实现的动作集合双向相等**、**evented 变量清单与实现一致**。
 
 用法：
-  python tests/dmr_compat_check.py                 # 自动找 127.0.0.1 / 192.0.2.1
-  python tests/dmr_compat_check.py --host 192.0.2.10:49152
+  python tests/dmr_compat_check.py                 # 自动找 127.0.0.1 / 192.168.2.99
+  python tests/dmr_compat_check.py --host 192.168.2.30:49152
 退出码 0 = 全绿。
 """
 from __future__ import annotations
@@ -166,7 +166,7 @@ def main() -> int:
 
     host = args.host
     if not host:
-        for cand in ("127.0.0.1:49152", "192.0.2.1:49152"):
+        for cand in ("127.0.0.1:49152", "192.168.2.99:49152"):
             try:
                 ip, port = cand.rsplit(":", 1)
                 socket.create_connection((ip, int(port)), timeout=3).close()

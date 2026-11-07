@@ -8,13 +8,17 @@
 
 C++20 + 自绘 UI（nanovg / GLFW），Windows 与 Linux 一等公民。
 
+> 关键词：手机投屏电脑 · 手机投屏到电脑 · 电脑投屏接收 · 投屏接收端 · 投屏接收器 · 无线投屏 · 屏幕镜像 · 隔空播放 · DLNA 投屏 · DLNA 接收 · DLNA 渲染器 · 视频投屏 · 免费开源投屏软件
+>
+> Keywords: DLNA receiver · UPnP AVTransport renderer · AirPlay receiver · AirPlay screen mirroring for Windows & Linux · cast phone to PC · mirror iPhone / Android screen to computer · watch phone video on PC · open-source casting receiver
+
 ## 界面预览
 
 播放态界面（无边框 + 上下贴边半透明栏 + 不操作自动隐去 + 悬停时间线出缩略图），默认皮肤「暗灰橙」（GNOME 深灰 + Ubuntu 橙）：
 
 ![播放态界面](docs/img/ui-preview.png)
 
-内置 7 套皮肤只替换颜色与圆角 token，布局完全一致；把自定义皮肤 JSON 放进用户皮肤目录 `skins/`，托盘「重载皮肤」即可热加载。
+内置 8 套皮肤只替换颜色与圆角 token，布局完全一致；把自定义皮肤 JSON 放进用户皮肤目录 `skins/`，托盘「重载皮肤」即可热加载。
 
 ## 下载
 
@@ -41,7 +45,7 @@ C++20 + 自绘 UI（nanovg / GLFW），Windows 与 Linux 一等公民。
   「投屏成功但连不上」。
 - **自绘 UI**：不依赖系统控件，各平台 / DPI 表现一致；常驻托盘，关窗即最小化到托盘
   （设备保持在线），真正退出走托盘菜单。
-- **皮肤系统**：界面全部 token 化，由 JSON 皮肤驱动（`assets/skins.json`）；内置 7 套
+- **皮肤系统**：界面全部 token 化，由 JSON 皮肤驱动（`assets/skins.json`）；内置 8 套
   皮肤，`settings.json` 的 `ui.skin` 选择；用户皮肤目录放自定义 JSON，托盘「重载皮肤」
   热加载，改色无需重启。
 - **智能画面填充**：按窗口 / 舞台比例自适应 cover / contain，竖屏镜像完整显示、不留
@@ -51,6 +55,8 @@ C++20 + 自绘 UI（nanovg / GLFW），Windows 与 Linux 一等公民。
 - **投屏呈现**：多屏可选、按屏记忆、自动全屏。
 - **倍速播放**：控制栏 0.5x–3.0x 七档选择（点击弹出列表），记住上次档位；直播回流
   延迟追赶自动倍速消费（scaletempo2 不变调）。
+- **自动更新**（v0.6.4 新增）：启动后自动检查新版本，直连与代理按实测下载速度择优，
+  后台静默下载并校验，完成后再提示安装；更新模块独立线程运行，不阻塞播放与投屏。
 
 ## 构建
 
@@ -109,11 +115,52 @@ Linux 那条**必须在 Linux 上跑**（依赖推导与 AppImage 工具都是 L
 任意新投屏自动接管当前会话。
 
 换肤：编辑 `settings.json` 把 `ui.skin` 改成内置皮肤 id（`nord-snow` / `nord-frost` /
-`nord-rose` / `nord-iris` / `nord-night` / `nord-forest` / `ubuntu-orange`），或在用户
-皮肤目录放入自己的 JSON 后点托盘「重载皮肤」。
+`nord-rose` / `nord-iris` / `nord-night` / `nord-forest` / `ubuntu-orange` /
+`ubuntu-orange-square`），或在用户皮肤目录放入自己的 JSON 后点托盘「重载皮肤」。
 
 界面语言：默认跟随系统界面语言（`settings.json` 的 `ui.language`，`auto` / `zh-CN` /
 `en-US`）；右键菜单「语言」子菜单或托盘菜单底部两个语言项可即时切换，无需重启。
+
+## 自动更新
+
+v0.6.4 起内置自动更新，更新模块运行在独立工作线程，不阻塞播放、投屏或界面：
+
+- **检查时机**：启动后 30 秒检查一次，之后每 4 小时一次；托盘菜单「检查更新」可手动
+  触发。相关键：`update.startup_delay_sec` / `update.check_interval_hours`。
+- **测速与切换**：GitHub API 直连与 `update.proxies` 中的代理并发赛跑，按**完整下载
+  API 响应体**的吞吐（B/s）排序，最快者胜出，不设直连优先；胜出端点优先复用，下载
+  安装包前还会以清单做第二轮测速排序。全部失败按 15 分钟 → 1 小时 → 6 小时 → 24
+  小时退避，网络恢复后自动继续。
+- **静默下载**：检测到新版本后在后台下载，SHA-256 校验通过后顶栏出现更新图标（皮肤
+  按钮左侧）；悬停显示「更新软件」，点击弹出安装向导，确认安装器启动后主程序退出。
+  不再自动弹窗。
+- **安装**：Windows 安装版弹出安装向导完成升级并重启；便携版打开下载目录手动替换；
+  AppImage 退出后自动替换并重启；deb 打开所在目录手动安装。
+- **首次可用版本**：自动更新链从 v0.6.4 开始生效。v0.6.3 及更早版本需手动下载一次
+  v0.6.4，此后（v0.6.4 → v0.6.5 起）由应用内自动更新完成。
+
+代理配置在 `settings.json` 的 `update` 组（Windows：`%APPDATA%\FlashRec\settings.json`，
+Linux：`$XDG_DATA_HOME/FlashRec/settings.json` 或 `~/.local/share/FlashRec/settings.json`）。
+`prefix` 直接拼在 GitHub URL 前，`template` 用 `{url}` 占位（两者二选一），`enabled`
+控制启停：
+
+```json
+"update": {
+  "enabled": true,
+  "auto_check": true,
+  "auto_download": true,
+  "direct_enabled": true,
+  "probe": { "timeout_ms": 4000, "concurrency": 4, "cache_sec": 600 },
+  "proxies": [
+    { "name": "gh-proxy", "prefix": "https://gh-proxy.com/", "enabled": true },
+    { "name": "my-mirror", "template": "https://example.com/gh/?url={url}", "enabled": true }
+  ]
+}
+```
+
+`update.api_base` 可指向自建镜像 / 内网 Releases API（必须 HTTPS）；关闭自动更新设
+`update.enabled=false`，只检查不下载设 `update.auto_download=false`。更新器只向端点发送
+版本检查与安装包请求，不上传账号、令牌或本地路径。
 
 ## 目录结构
 

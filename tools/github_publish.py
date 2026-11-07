@@ -5,6 +5,9 @@
   token set [--stdin]     保存 token（env > keyring加密 > 明文文件，见 token 政策）
   token check             校验 token（GET /user，不回显）
   repo create NAME [--private] [--desc D]   建仓（已存在则直接采用）
+  repo meta [--repo O/N] [--desc D] [--homepage U] [--topics a,b]
+                                     同步仓库描述/主页/topics（可搜索性，d524）；
+                                     publish 子流程每次发布自动同步一次
   push [--tags] [--allow-dirty] [--branch B] 推送当前分支（+tag），token 不入 git config
   ci trigger [--workflow W] [--ref R]       触发 workflow_dispatch（无则提示走 tag 触发）
   ci status [--watch] [--workflow W]        查询/等待最近一次 CI 运行结论
@@ -37,6 +40,21 @@ from pathlib import Path
 SERVICE = "github-publish"  # keyring 服务名
 API = "https://api.github.com"
 TIMEOUT = 30
+
+# —— 仓库元数据默认值（d524 可搜索性：GitHub best-match 依重 name/description/
+#    topics/star；description 英文在前吃英文搜索量，中文长尾吃国内查询）——
+# 注意：GitHub topics 只允许小写字母/数字/连字符，中文放不进去（README 承载）。
+DEFAULT_DESCRIPTION = (
+    "DLNA / UPnP (DMR) & AirPlay casting receiver for Windows & Linux — "
+    "cast phone video or mirror screen to your PC · "
+    "手机投屏电脑：DLNA 推送 + AirPlay 镜像，无线投屏接收端")
+DEFAULT_HOMEPAGE = "https://github.com/jianglinbin/FlashRec/releases"
+DEFAULT_TOPICS = [
+    "dlna", "upnp", "dlna-mediarenderer", "airplay", "airplay-receiver",
+    "airplay-mirroring", "screen-mirroring", "screen-casting", "screencast",
+    "cast-receiver", "dlna-receiver", "media-renderer", "wireless-display",
+    "windows", "linux", "cpp", "cpp20", "mpv", "glfw", "nanovg",
+]
 
 
 def die(msg: str, code: int = 1) -> None:
@@ -226,6 +244,35 @@ def cmd_repo_create(args) -> None:
     log(f"已记录目标仓库：{login}/{args.name}")
 
 
+def sync_repo_meta(tok: str, owner: str, name: str, desc: str,
+                   homepage: str, topics: list) -> None:
+    """同步 description/homepage（PATCH）与 topics（PUT）。
+
+    元数据失败只告警不 die —— 绝不阻塞发布主流程（代码/安装包才是发布主体）。"""
+    code, data = api("PATCH", f"/repos/{owner}/{name}", tok,
+                     {"description": desc, "homepage": homepage})
+    if code >= 300:
+        log(f"警告：description/homepage 同步失败 HTTP {code}：{data.get('message', '')}")
+    else:
+        log(f"仓库描述/homepage 已同步（{owner}/{name}）")
+    code, data = api("PUT", f"/repos/{owner}/{name}/topics", tok, {"names": topics})
+    if code >= 300:
+        log(f"警告：topics 同步失败 HTTP {code}：{data.get('message', '')}")
+    else:
+        log(f"topics 已同步（{len(topics)} 个）")
+
+
+def cmd_repo_meta(args) -> None:
+    tok = token_load()
+    owner, name = ensure_repo_info(
+        tok, *([None, None] if not args.repo else args.repo.split("/", 1)))
+    desc = args.desc or DEFAULT_DESCRIPTION
+    homepage = args.homepage or DEFAULT_HOMEPAGE
+    topics = ([t.strip().lower() for t in args.topics.split(",") if t.strip()]
+              if args.topics else DEFAULT_TOPICS)
+    sync_repo_meta(tok, owner, name, desc, homepage, topics)
+
+
 def cmd_push(args) -> None:
     tok = token_load()
     root = require_repo()
@@ -360,6 +407,10 @@ def cmd_publish(args) -> None:
         cmd_repo_create(argparse.Namespace(name=name, private=args.private, desc=None))
     cmd_push(argparse.Namespace(repo=f"{owner}/{name}", tags=args.tags,
                                 allow_dirty=args.allow_dirty, branch=None))
+    try:  # d524：每次发布顺手同步可搜索性元数据；失败不阻塞发布
+        sync_repo_meta(tok, owner, name, DEFAULT_DESCRIPTION, DEFAULT_HOMEPAGE, DEFAULT_TOPICS)
+    except Exception as e:
+        log(f"警告：仓库元数据同步异常（不影响本次发布）：{e}")
     wf_dir = root / ".github" / "workflows"
     ymls = sorted(p.name for p in wf_dir.glob("*.y*ml")) if wf_dir.is_dir() else []
     if len(ymls) == 1:
@@ -387,6 +438,10 @@ def main() -> None:
     rc_c = rs.add_parser("create"); rc_c.add_argument("name")
     rc_c.add_argument("--private", action="store_true"); rc_c.add_argument("--desc")
     rc_c.set_defaults(func=cmd_repo_create)
+    rc_m = rs.add_parser("meta", help="同步描述/主页/topics（可搜索性）")
+    rc_m.add_argument("--repo", help="OWNER/NAME（缺省用已记录的）")
+    rc_m.add_argument("--desc"); rc_m.add_argument("--homepage"); rc_m.add_argument("--topics")
+    rc_m.set_defaults(func=cmd_repo_meta)
 
     ps = sub.add_parser("push", help="推送当前分支")
     ps.add_argument("--tags", action="store_true"); ps.add_argument("--branch")

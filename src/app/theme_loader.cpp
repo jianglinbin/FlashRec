@@ -459,6 +459,11 @@ void apply_layout(Theme* t, const JVal& layout, const char* ctx,
   num_field(layout, {"thumbPreview", "height"}, &l.thumbH, ctx, warns);
   num_field(layout, {"thumbPreview", "radius"}, &l.thumbRadius, ctx, warns);
   num_field(layout, {"thumbPreview", "gapAboveProgress"}, &l.thumbGapAbove, ctx, warns);
+  // d520 皮肤级圆角：菜单 / OSD / 剪贴板提示条（直角皮肤全部归零用）
+  num_field(layout, {"ctxMenu", "radius"}, &l.ctxRadius, ctx, warns);
+  num_field(layout, {"osd", "radius"}, &l.osdRadius, ctx, warns);
+  num_field(layout, {"promptBar", "barRadius"}, &l.promptBarRadius, ctx, warns);
+  num_field(layout, {"promptBar", "btnRadius"}, &l.promptBtnRadius, ctx, warns);
   num_field(layout, {"volumeBar", "width"}, &l.volW, ctx, warns);
   num_field(layout, {"volumeBar", "height"}, &l.volH, ctx, warns);
   num_field(layout, {"volumeBar", "iconSize"}, &l.volIcon, ctx, warns);

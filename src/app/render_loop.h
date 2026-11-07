@@ -85,7 +85,11 @@ class RenderLoop {
   bool start();
 
   // 请求停止并 join。必须在销毁窗口之前调用（否则 GL 调用会打到已销毁的窗口）。
-  void stop();
+  // ★d523：join 限时 —— 渲染线程可能僵死在 Wayland/EGL 交换里（合成器停发帧
+  // 回调 → eglSwapBuffers 永不返回，真机实锤），无限 join = 僵尸进程占单实例锁、
+  // 音频继续、应用无法再启动。超时返回 false（线程已 detach，由收尾段走
+  // std::_Exit 强制退出通道）。
+  bool stop(unsigned timeout_ms = 5000);
 
   // 任意线程可调：唤醒渲染线程立即出一帧（输入变化/系统请求重绘时）。
   // d94：**不再经由 GLFW 事件循环**（旧实现 = glfwPostEmptyEvent，见 wait_wake 注释）。
@@ -265,6 +269,7 @@ class RenderLoop {
 
   std::thread thread_;
   std::atomic<bool> quit_{false};
+  std::atomic<bool> quit_done_{false};  // ★d523：run() 末尾置位（含 init 失败早退），stop() 限时 join 的完成信号
   std::atomic<bool> render_ready_{false};
 
   // —— 主线程设置、渲染线程读（简单原子/单写者，够用）——

@@ -13,7 +13,7 @@ namespace fr {
 namespace {
 
 constexpr size_t kMaxAssetName = 160;
-constexpr size_t kMaxNotesBytes = 600;
+constexpr size_t kMaxNotesBytes = 2048;  // d519：双语分存，600 会截断中文段（~720B 实测）
 constexpr long long kMaxAssetSize = 8LL * 1024 * 1024 * 1024;  // 8GB 防御上限
 
 bool starts_with(std::string_view s, std::string_view p) {
@@ -222,6 +222,57 @@ void truncate_utf8(std::string* s, size_t max_bytes) {
   s->resize(n);
 }
 
+// —— d519：双语 Release 正文切分（release_info.h 为规格）——
+namespace {
+
+// 行内剥轻量 markdown：行首 "#"+ 空格（标题）、行内 "**"（粗体标记）。
+void strip_md_line(std::string_view line, std::string* out) {
+  std::string_view v = line;
+  while (!v.empty() && (v.back() == '\r' || v.back() == ' ')) v.remove_suffix(1);
+  size_t h = 0;
+  while (h < v.size() && v[h] == '#') ++h;
+  if (h > 0 && h <= 6 && h < v.size() && v[h] == ' ') v.remove_prefix(h + 1);
+  for (size_t i = 0; i < v.size(); ++i) {
+    if (v[i] == '*' && i + 1 < v.size() && v[i + 1] == '*') { ++i; continue; }
+    out->push_back(v[i]);
+  }
+}
+
+}  // namespace
+
+void split_bilingual_notes(std::string_view body, std::string* zh, std::string* en) {
+  if (!zh || !en) return;
+  *zh = std::string();
+  *en = std::string();
+  // 分界 = 行首为 '#' 且该行含 "(English)"（我们固定的双语正文格式）。
+  // 空行全丢：弹窗说明区有行数上限（d460 8 行），空行白耗额度。
+  // zh 段首个内容行若是标题（# FlashRec vX）则跳过——版本号已在弹窗标题里。
+  std::string* dst = zh;
+  bool zh_title_pending = true;
+  size_t pos = 0;
+  while (pos <= body.size()) {
+    size_t eol = body.find('\n', pos);
+    const bool last = eol == std::string_view::npos;
+    std::string_view line = body.substr(pos, last ? body.size() - pos : eol - pos);
+    pos = last ? body.size() + 1 : eol + 1;
+    const std::string_view t = trim_view(line);
+    if (t.empty()) continue;
+    if (dst == zh && t.front() == '#' &&
+        t.find("(English)") != std::string_view::npos) {
+      dst = en;
+      continue;  // 分界标题行不进任何一段
+    }
+    if (dst == zh && zh_title_pending) {
+      zh_title_pending = false;
+      if (t.front() == '#') continue;  // 首个内容行 = 中文段标题 → 丢弃
+    }
+    strip_md_line(line, dst);
+    dst->push_back('\n');
+  }
+  while (!zh->empty() && zh->back() == '\n') zh->pop_back();
+  while (!en->empty() && en->back() == '\n') en->pop_back();
+}
+
 bool parse_github_release(std::string_view json, ReleaseInfo* out, std::string* err) {
   if (!out) return false;
   *out = ReleaseInfo{};
@@ -313,6 +364,9 @@ bool parse_manifest(std::string_view json, ReleaseManifest* out, std::string* er
   out->notes = root.get_string("notes");
   sanitize_text(&out->notes);
   truncate_utf8(&out->notes, kMaxNotesBytes);
+  out->notes_en = root.get_string("notes_en");  // d519：缺省空 = 显示层回退中文
+  sanitize_text(&out->notes_en);
+  truncate_utf8(&out->notes_en, kMaxNotesBytes);
   out->key_id = root.get_string("key_id");
   out->signature = root.get_string("signature");
 
@@ -339,9 +393,11 @@ bool build_manifest_from_release(const ReleaseInfo& info, ReleaseManifest* out) 
   out->version = info.version;
   out->published_at = info.published_at;
   if (starts_with(info.html_url, "https://")) out->release_url = info.html_url;
-  out->notes = info.body;
+  split_bilingual_notes(info.body, &out->notes, &out->notes_en);
   sanitize_text(&out->notes);
   truncate_utf8(&out->notes, kMaxNotesBytes);
+  sanitize_text(&out->notes_en);
+  truncate_utf8(&out->notes_en, kMaxNotesBytes);
 
   for (const ReleaseApiAsset& src : info.assets) {
     const AssetKind kind = classify_asset(src.name);

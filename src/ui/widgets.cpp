@@ -139,10 +139,14 @@ void text_truncated(NVGcontext* vg, const Theme& t, float x, float y, float size
 
 void circle_btn(NVGcontext* vg, const Theme& t, float cx, float cy, float d, NVGcolor bg,
                 NVGcolor border, NVGcolor icon) {
-  (void)t;
   (void)border;  // d215：描边线一律去掉（不再画播放键外框）
   nvgBeginPath(vg);
-  nvgCircle(vg, cx, cy, d * 0.5f);
+  // d520：形状 token 真正生效 —— 圆/方由 shape.playButtonShape 决定
+  // （此前恒画圆，方键皮肤的 playButtonShape=square 形同虚设）
+  if (t.shape.playButtonCircle)
+    nvgCircle(vg, cx, cy, d * 0.5f);
+  else
+    nvgRect(vg, cx - d * 0.5f, cy - d * 0.5f, d, d);
   nvgFillColor(vg, bg);
   nvgFill(vg);
   (void)icon;  // 图标由调用方随后用 icon_* 绘制

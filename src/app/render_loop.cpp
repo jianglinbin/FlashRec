@@ -95,7 +95,8 @@ bool input_changed(const ViewInput& a, const ViewInput& b) {
          std::strcmp(a.update.version, b.update.version) != 0 ||
          std::strcmp(a.update.size, b.update.size) != 0 ||
          std::strcmp(a.update.error, b.update.error) != 0 ||
-         std::strcmp(a.update.notes, b.update.notes) != 0 ||  // v0.6.4 更新弹窗
+         std::strcmp(a.update.notes_zh, b.update.notes_zh) != 0 ||  // v0.6.4 更新弹窗
+         std::strcmp(a.update.notes_en, b.update.notes_en) != 0 ||  // d519 双语说明
          a.popup_l != b.popup_l || a.popup_t != b.popup_t ||            // d438 菜单可用区
          a.popup_r != b.popup_r || a.popup_b != b.popup_b;
 }
@@ -286,11 +287,25 @@ void RenderLoop::request_full_repaint() {
   wake();
 }
 
-void RenderLoop::stop() {
-  if (!thread_.joinable()) return;
+bool RenderLoop::stop(unsigned timeout_ms) {
+  if (!thread_.joinable()) return true;
   quit_.store(true, std::memory_order_release);
   wake();  // 立即唤醒，避免等超时（d94：条件变量通知，原为 post_empty_event）
+  // ★d523：限时 join —— 渲染线程可能僵死在 Wayland/EGL 交换里（合成器停发帧
+  // 回调 → eglSwapBuffers 永不返回；无限 join = 僵尸进程占单实例锁）。
+  const auto t0 = std::chrono::steady_clock::now();
+  while (!quit_done_.load(std::memory_order_acquire)) {
+    if (std::chrono::steady_clock::now() - t0 >
+        std::chrono::milliseconds(timeout_ms)) {
+      FR_LOG_ERROR("[UI] 渲染线程 {}ms 未退出（疑卡在 EGL/Wayland 交换），放弃 join",
+                   timeout_ms);
+      thread_.detach();
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
   thread_.join();
+  return true;
 }
 
 void RenderLoop::run() {
@@ -298,6 +313,7 @@ void RenderLoop::run() {
   window_.make_current();
   if (!init_gl_resources()) {
     quit_.store(true, std::memory_order_release);
+    quit_done_.store(true, std::memory_order_release);
     return;
   }
   prev_now_ = mono_now();
@@ -327,6 +343,7 @@ void RenderLoop::run() {
   }
   nvg_.shutdown();
   window_.release_context();
+  quit_done_.store(true, std::memory_order_release);  // ★d523：stop() 限时 join 的完成信号
 }
 
 namespace {

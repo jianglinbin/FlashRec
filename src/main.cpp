@@ -274,11 +274,14 @@ int main(int argc, char** argv) {
   // 视作指定值（如 0.6.2），令更新检测对 GitHub 最新版判出升级，用于真机端到端
   // 自动更新演练。仅影响更新检测口径，UI/帮助面板的真实版本不受影响；未传即正常。
   std::string fake_update_version;
+  double quit_after_sec = 0;  // ★d523：--quit-after=<sec> 到点走 on_quit_request（E2E 验证退出链路）
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--console") == 0 || std::strcmp(argv[i], "-c") == 0) {
       want_console = true;
     } else if (std::strncmp(argv[i], "--update-version=", 17) == 0) {
       fake_update_version = argv[i] + 17;
+    } else if (std::strncmp(argv[i], "--quit-after=", 13) == 0) {
+      quit_after_sec = std::atof(argv[i] + 13);
     }
   }
   bool have_console = want_console ? console_open() : console_available();
@@ -385,6 +388,9 @@ int main(int argc, char** argv) {
       fake_update_version.empty() ? std::string(FLASHREC_VERSION) : fake_update_version;
   if (!fake_update_version.empty())
     FR_LOG_WARN("[UPD] 调试开关生效：当前版本视作 {}（--update-version）", updater_version);
+  if (quit_after_sec > 0)
+    FR_LOG_WARN("[APP] 调试开关生效：{}s 后自动退出（--quit-after，走 on_quit_request 全链）",
+                quit_after_sec);
   fr::update::UpdateService updater;
   updater.start(cfg.update, updater_version, paths::config_file());
   // d83：托盘模式下启动即隐窗。先隐再跑 mpv/DMR 初始化（全程不闪现）；
@@ -871,7 +877,8 @@ int main(int argc, char** argv) {
     }
     upd_copy(u.version, sizeof(u.version), us.latest_version);
     upd_copy(u.current, sizeof(u.current), us.current_version);
-    upd_copy(u.notes, sizeof(u.notes), us.notes);
+    upd_copy(u.notes_zh, sizeof(u.notes_zh), us.notes_zh);
+    upd_copy(u.notes_en, sizeof(u.notes_en), us.notes_en);
     if (st != UpdateStage::Ready) u.confirm_install = false;
     u.stage = st;
     if (st == UpdateStage::Hidden && u.prompt) u.prompt = false;
@@ -2453,9 +2460,14 @@ int main(int argc, char** argv) {
   //   标成"未响应"，故该值必须 > 看门狗阈值 5000）。
   int test_hang_ms = 0;
   if (const char* v = getenv("FR_TEST_HANG_MS")) test_hang_ms = atoi(v);
+  const double main_t0 = mono_now();  // ★d523：--quit-after 的计时基准
   while (!window.should_close()) {
     const double now = mono_now();
     crash_dump::beat();  // ★d282：主线程心跳（卡死看门狗的唯一判据源；一次原子写）
+    if (quit_after_sec > 0 && now - main_t0 >= quit_after_sec) {  // ★d523 调试开关
+      quit_after_sec = 0;  // 只触发一次
+      if (window.on_quit_request) window.on_quit_request();
+    }
     if (test_hang_ms > 0) {
       const int ms = test_hang_ms;
       test_hang_ms = 0;
@@ -2763,8 +2775,11 @@ int main(int argc, char** argv) {
                    {"player", "muted", mute_last ? "true" : "false"}});
   }
   // 顺序关键：先停渲染线程（释放 GL 资源、交还上下文），再动窗口/播放器。
-  render.stop();
-  thumb.shutdown();  // 渲染线程已停，不再读结果槽；先停 worker 再销毁 mpv
+  // ★d523：渲染线程可能僵死在 Wayland/EGL 交换里（合成器停发帧回调 →
+  // eglSwapBuffers 永不返回，真机实锤）—— join 限时 5s，超时放弃等待，收尾
+  // 段尾部走 std::_Exit 强制退出（GL/mpv 终结会与卡死线程互踩，全部跳过）。
+  const bool render_joined = render.stop();
+  thumb.shutdown();  // 渲染线程已停（或已放弃等待），不再读结果槽；先停 worker 再销毁 mpv
 
 #ifdef FR_AIRPLAY
   // d269：先拆 AirPlay（raop_destroy 含 httpd 停止 + mDNS goodbye 发 farewell），
@@ -2783,10 +2798,19 @@ int main(int argc, char** argv) {
   }
   keep_awake::set(false);
   dmr.stop();
-  player.shutdown();
+  if (render_joined) {
+    // ★d523：渲染线程僵死时跳过 —— mpv_terminate_destroy 需等渲染线程让出
+    // render context（卡死的线程永远等不到）；音频由 _Exit 随进程终止。
+    player.shutdown();
+  }
   // d459：先取消更新网络/下载并 join（.part 保留），再关日志。
   updater.stop();
   platform::net_watch_stop();  // ★d510：回收网络监听线程/句柄
+  if (!render_joined) {
+    FR_LOG_WARN("[APP] 渲染线程僵死，强制退出（音频随进程终止；GL/窗口不清理）");
+    spdlog::default_logger()->flush();
+    std::_Exit(0);  // 不走 window.destroy()/glfwTerminate —— 与卡死线程互踩
+  }
   window.destroy();
   FR_LOG_INFO("[APP] 退出");
   shutdown_logger();

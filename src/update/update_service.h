@@ -52,7 +52,8 @@ struct UpdateSnapshot {
   char current_version[32] = {};
   char latest_version[32] = {};
   char release_url[512] = {};
-  char notes[608] = {};
+  char notes_zh[1536] = {};   // d519：更新说明·中文（弹窗 8 行 cap，≤1536 足够）
+  char notes_en[1536] = {};   // d519：更新说明·英文（清单未携带则为空，UI 回退中文）
   char asset_name[128] = {};
   char asset_path[520] = {};
   char asset_sha256[72] = {};  // ★d495：下载产物摘要（清单校验值），便携换装安装前复核用

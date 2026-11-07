@@ -136,48 +136,48 @@ static void test_subnet_match(void) {
   printf("\n== 5. LOCATION 重写 ==\n");
   check_rewrite("NOTIFY * HTTP/1.1\r\n"
                 "CACHE-CONTROL: max-age=1800\r\n"
-                "LOCATION: http://192.0.2.2:49152/fr/device.xml\r\n"
+                "LOCATION: http://192.168.32.1:49152/fr/device.xml\r\n"
                 "NT: upnp:rootdevice\r\n\r\n",
-                "192.0.2.1",
+                "192.168.2.99",
                 "NOTIFY * HTTP/1.1\r\n"
                 "CACHE-CONTROL: max-age=1800\r\n"
-                "LOCATION: http://192.0.2.1:49152/fr/device.xml\r\n"
+                "LOCATION: http://192.168.2.99:49152/fr/device.xml\r\n"
                 "NT: upnp:rootdevice\r\n\r\n",
                 "同长度替换：主机段换成对应网卡 IP");
 
-  check_rewrite("LOCATION: http://1.2.3.4:1900/d.xml\r\n", "192.0.2.1",
-                "LOCATION: http://192.0.2.1:1900/d.xml\r\n",
+  check_rewrite("LOCATION: http://1.2.3.4:1900/d.xml\r\n", "192.168.2.99",
+                "LOCATION: http://192.168.2.99:1900/d.xml\r\n",
                 "变长替换（短 -> 长）");
 
-  check_rewrite("LOCATION: http://192.0.2.1:49152/fr/device.xml\r\n",
+  check_rewrite("LOCATION: http://192.168.2.99:49152/fr/device.xml\r\n",
                 "10.0.0.1", "LOCATION: http://10.0.0.1:49152/fr/device.xml\r\n",
                 "变长替换（长 -> 短）");
 
-  check_rewrite("location: http://192.0.2.2/x.xml\r\n", "192.0.2.1",
-                "location: http://192.0.2.1/x.xml\r\n",
+  check_rewrite("location: http://192.168.32.1/x.xml\r\n", "192.168.2.99",
+                "location: http://192.168.2.99/x.xml\r\n",
                 "头名大小写不敏感，且不改动原大小写");
 
-  check_rewrite("LOCATION: http://10.0.0.5/d.xml\r\n", "192.0.2.1",
-                "LOCATION: http://192.0.2.1/d.xml\r\n",
+  check_rewrite("LOCATION: http://10.0.0.5/d.xml\r\n", "192.168.2.99",
+                "LOCATION: http://192.168.2.99/d.xml\r\n",
                 "无端口形式：主机段到 '/' 结束");
 
-  check_rewrite("LOCATION: http://[::1]:1900/d.xml\r\n", "192.0.2.1",
+  check_rewrite("LOCATION: http://[::1]:1900/d.xml\r\n", "192.168.2.99",
                 "LOCATION: http://[::1]:1900/d.xml\r\n",
                 "IPv6 字面量不动（本补丁只管 IPv4 主机段）");
 
   check_rewrite("NOTIFY * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n\r\n",
-                "192.0.2.1",
+                "192.168.2.99",
                 "NOTIFY * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n\r\n",
                 "没有 LOCATION 时返回原样副本");
 
-  check_rewrite("LOCATION: ftp://192.0.2.2/x\r\n", "192.0.2.1",
-                "LOCATION: ftp://192.0.2.2/x\r\n",
+  check_rewrite("LOCATION: ftp://192.168.32.1/x\r\n", "192.168.2.99",
+                "LOCATION: ftp://192.168.32.1/x\r\n",
                 "非 http:// 形式不动");
 
   // 所有权：原包内容不许被改
-  const char* orig = "LOCATION: http://192.0.2.2:49152/fr/device.xml\r\n";
+  const char* orig = "LOCATION: http://192.168.32.1:49152/fr/device.xml\r\n";
   char* copy = strdup(orig);
-  char* out = fr_net_if_rewrite_location(copy, "192.0.2.1");
+  char* out = fr_net_if_rewrite_location(copy, "192.168.2.99");
   check(out != NULL && out != copy, "返回新指针，不原地修改");
   check_str(copy, orig, "原包内容保持不变（所有权在调用方）");
   free(copy);
@@ -197,14 +197,14 @@ static void test_doc_localize(void) {
   static const char kDoc[] =
       "<?xml version=\"1.0\"?>\r\n"
       "<root>\r\n"
-      "<URLBase>http://192.0.2.1:49152/</URLBase>\r\n"
+      "<URLBase>http://192.168.2.99:49152/</URLBase>\r\n"
       "<controlURL>/fr/control/AVTransport</controlURL>\r\n"
       "</root>\r\n";
   size_t len = 0;
 
   // ① Host 带端口：整个 authority 被替换，且**不会**出现 "ip:端口:端口"
   //    （d117 实测：只换主机段会拼出 http://ip:49152:49152/，SOAP 全挂）
-  len = fr_net_if_doc_localize(kDoc, sizeof(kDoc) - 1, "192.0.2.2:49152", 18);
+  len = fr_net_if_doc_localize(kDoc, sizeof(kDoc) - 1, "192.168.32.1:49152", 18);
   check(len > 0, "Host 带端口时应重写");
   char* got = fr_net_if_doc_take(&len);
   check(got != NULL, "take() 取到替换结果");
@@ -212,7 +212,7 @@ static void test_doc_localize(void) {
   check_str(got,
             "<?xml version=\"1.0\"?>\r\n"
             "<root>\r\n"
-            "<URLBase>http://192.0.2.2:49152/</URLBase>\r\n"
+            "<URLBase>http://192.168.32.1:49152/</URLBase>\r\n"
             "<controlURL>/fr/control/AVTransport</controlURL>\r\n"
             "</root>\r\n",
             "authority 整体替换（主机+端口），无重复端口");
@@ -233,7 +233,7 @@ static void test_doc_localize(void) {
   free(got);
 
   // ③ 与现值相同：无需替换（常见路径 —— 客户端就在优选网卡网段上）
-  check(fr_net_if_doc_localize(kDoc, sizeof(kDoc) - 1, "192.0.2.1:49152", 18) == 0,
+  check(fr_net_if_doc_localize(kDoc, sizeof(kDoc) - 1, "192.168.2.99:49152", 18) == 0,
         "authority 与现值相同 → 返回 0（不发替换版）");
   check(fr_net_if_doc_take(&len) == NULL, "返回 0 时槽位必须为空");
 
@@ -245,7 +245,7 @@ static void test_doc_localize(void) {
 
   // ⑤ Host 是客户端可控的输入：注入字符必须被拒绝
   check(fr_net_if_doc_localize(kDoc, sizeof(kDoc) - 1,
-                               "192.0.2.1:49152</URLBase><x>", 30) == 0,
+                               "192.168.2.99:49152</URLBase><x>", 30) == 0,
         "Host 含 '<' → 拒绝（防注入）");
   check(fr_net_if_doc_localize(kDoc, sizeof(kDoc) - 1, "a b", 3) == 0,
         "Host 含空格 → 拒绝");

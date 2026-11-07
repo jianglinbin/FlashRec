@@ -26,6 +26,7 @@ struct DetectionResult {
   std::string latest_version;
   std::string release_url;
   std::string notes;
+  std::string notes_en;  // d519：更新说明·英文（清单未携带则为空）
   ReleaseManifest manifest;
   std::vector<RankedEndpoint> download_endpoints;  // 与权威清单同版本，按吞吐降序
   bool atom = false;

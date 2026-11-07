@@ -174,9 +174,15 @@ DialogContent build_content(NVGcontext* vg, const Theme& t, const UpdateUi& u, f
     c.warning = wrap_text(vg, font, tr(i18n::StrId::UpdDlgCastWarning), content_w, 2);
 
   if ((u.stage == UpdateStage::Ready || u.stage == UpdateStage::ManualOnly) &&
-      u.notes[0] && notes_cap > 0) {
-    c.notes = wrap_text(vg, small, u.notes, content_w, notes_cap);
-    if (!c.notes.empty()) c.notes_title = tr(i18n::StrId::UpdDlgNotesTitle);
+      notes_cap > 0) {
+    // d519：按界面语言取对应语言段；该语言缺失时回退另一语言（清单未携带英文=旧版清单）。
+    const bool want_en = i18n::lang() == i18n::Lang::EnUs;
+    const char* notes = want_en ? u.notes_en : u.notes_zh;
+    if (!notes[0]) notes = want_en ? u.notes_zh : u.notes_en;
+    if (notes[0]) {
+      c.notes = wrap_text(vg, small, notes, content_w, notes_cap);
+      if (!c.notes.empty()) c.notes_title = tr(i18n::StrId::UpdDlgNotesTitle);
+    }
   }
   return c;
 }
@@ -365,7 +371,8 @@ UpdateDialogLayout update_dialog_layout(NVGcontext* vg, const Theme& t, float wi
                                         float win_h, const UpdateUi& u) {
   LayoutParts p = build_layout(vg, t, win_w, win_h, u, 8);
   // 小窗口：说明区按可用高度收行，避免卡片顶出窗口
-  if (u.notes[0] && (u.stage == UpdateStage::Ready || u.stage == UpdateStage::ManualOnly)) {
+  if ((u.notes_zh[0] || u.notes_en[0]) &&
+      (u.stage == UpdateStage::Ready || u.stage == UpdateStage::ManualOnly)) {
     const float max_h = std::max(180.f, win_h - 18.f);
     if (p.lay.h > max_h) {
       const int cut = (int)std::ceil((p.lay.h - max_h) / std::max(1.f, p.lay.notes_line_h));

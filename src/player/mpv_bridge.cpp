@@ -30,6 +30,27 @@ bool MpvBridge::init() {
   }
   mpv_set_option_string(mpv_, "vo", "libmpv");
   mpv_set_option_string(mpv_, "hwdec", "auto-safe");
+  // ★d521：硬解帧直传 GL 的偶发花屏规避 —— 强制一次同格式 CPU 帧拷贝。
+  // 取证（2026-11-02 AirPlay 会话 + 落盘复现）：
+  //   ① 会话落盘 ts_dump.ts（233s）用 ffmpeg 解仅 1 个宏块报错；d3d11va 与软解
+  //      逐帧 framemd5 比对 6215 帧中 6214 帧完全一致（首帧为起始状态差异）
+  //      ⇒ 码流与解码器输出清白，不是协议/复用/解码问题；
+  //   ② 同一 ts_dump.ts 当本地文件投屏（完全不经过 AirPlay 协议栈）仍复现
+  //      彩色横条/碎块，hwdec=no 则干净 ⇒ 差异只在「GPU 解码帧 → GL 纹理」；
+  //   ③ 花屏偶发且随输出分辨率/GPU 负载升高（4K 明显、960x540 偶发）
+  //      ⇒ 帧交付/上传时序问题，不是确定性像素错误。
+  // vf-add=copy：格式/位深/色域都不变，仅一次 memcpy（1080p ≈3MB/帧），
+  //   把硬解帧从解码器缓冲解耦后再交给 libplacebo 上传。
+  // FR_NO_HWDEC_COPY=1 可关闭（二分/上游修复后退役）。
+  const bool hwcopy_off = [] {
+    const char* v = std::getenv("FR_NO_HWDEC_COPY");
+    return v != nullptr && *v != '\0' && *v != '0';
+  }();
+  if (!hwcopy_off) {
+    mpv_set_option_string(mpv_, "vf-add", "copy");
+  } else {
+    FR_LOG_WARN("[MPV] FR_NO_HWDEC_COPY=1：跳过硬解帧拷贝（花屏规避关闭）");
+  }
   mpv_set_option_string(mpv_, "keep-open", "no");
   mpv_set_option_string(mpv_, "terminal", "no");
   mpv_set_option_string(mpv_, "input-default-bindings", "no");

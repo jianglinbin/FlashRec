@@ -168,12 +168,13 @@ std::string manifest_json(const std::string& version = "0.6.5") {
   std::string asset_version = version;
   if (!asset_version.empty() && (asset_version.front() == 'v' || asset_version.front() == 'V'))
     asset_version.erase(asset_version.begin());
-  std::string t = R"({
+  std::string t = R"json({
     "schema": 1,
     "version": "@VER@",
     "published_at": "2026-11-01T12:00:00Z",
     "release_url": "https://github.com/jianglinbin/FlashRec/releases/tag/@VER@",
     "notes": "fixes\nand improvements",
+    "notes_en": "fixes\nand improvements (en)",
     "assets": {
       "windows_setup": {"name": "FlashRec-@AVER@-win64-setup.exe",
                         "size": 123, "sha256": "@SHA@"},
@@ -186,7 +187,7 @@ std::string manifest_json(const std::string& version = "0.6.5") {
     },
     "key_id": "update-2026",
     "signature": "deadbeef"
-  })";
+  })json";
   for (size_t p = t.find("@VER@"); p != std::string::npos; p = t.find("@VER@", p + version.size()))
     t.replace(p, 5, version);
   for (size_t p = t.find("@AVER@"); p != std::string::npos;
@@ -210,7 +211,15 @@ void test_manifest() {
   CHECK_EQ(m.windows_zip.size, 456LL);
   CHECK_EQ(m.windows_zip.sha256, std::string(64, 'a'));
   CHECK_EQ(m.notes, std::string("fixes\nand improvements"));
+  CHECK_EQ(m.notes_en, std::string("fixes\nand improvements (en)"));  // d519
   CHECK(m.has_signature());
+
+  // d519：旧清单无 notes_en 键 → 解析仍通过，notes_en 为空
+  std::string legacy = manifest_json();
+  const std::string en_line = R"nl("notes_en": "fixes\nand improvements (en)",)nl";
+  legacy.erase(legacy.find(en_line), en_line.size() + 1);  // +1 吃掉行尾换行
+  CHECK(fr::parse_manifest(legacy, &m, &err));
+  CHECK(m.notes_en.empty());
 
   // 版本/资产名不一致 → 该资产不可用，清单本身仍可用
   std::string bad = manifest_json();
@@ -227,15 +236,40 @@ void test_manifest() {
   schema2.replace(schema2.find("\"schema\": 1"), 11, "\"schema\": 2");
   CHECK(!fr::parse_manifest(schema2, &m, &err));
 
-  // notes 超长 → 600 字节内且 UTF-8 完整
+  // notes 超长 → 2048 字节内且 UTF-8 完整（d519：600→2048）
   std::string big = manifest_json();
   const size_t n = big.find("fixes");
   std::string notes;
-  for (int i = 0; i < 300; ++i) notes += "中";
+  for (int i = 0; i < 1024; ++i) notes += "中";  // 3072 字节 > 上限
   big.replace(n, 5, notes);
   CHECK(fr::parse_manifest(big, &m, &err));
-  CHECK(m.notes.size() <= 600);
+  CHECK(m.notes.size() <= 2048);
   CHECK(valid_utf8(m.notes));
+}
+
+// d519：双语正文切分（fallback 路径 = GitHub API body）
+void test_split_bilingual_notes() {
+  std::string zh, en;
+  const std::string body =
+      "# FlashRec v0.6.8\n"
+      "\n"
+      "## 新增\n"
+      "- **网络自愈**：自动恢复\n"
+      "\n"
+      "# FlashRec v0.6.8 (English)\n"
+      "\n"
+      "## Added\n"
+      "- **Network self-healing**: auto recovery\n";
+  fr::split_bilingual_notes(body, &zh, &en);
+  CHECK_EQ(zh, std::string("新增\n"
+                           "- 网络自愈：自动恢复"));
+  CHECK_EQ(en, std::string("Added\n"
+                           "- Network self-healing: auto recovery"));
+
+  // 无英文段 → en 空、zh=全文（剥 markdown；首个标题行丢弃）
+  fr::split_bilingual_notes("# 标题\n内容 **加粗**", &zh, &en);
+  CHECK_EQ(zh, std::string("内容 加粗"));
+  CHECK(en.empty());
 }
 
 void test_github_release() {
@@ -1689,6 +1723,7 @@ int main() {
   test_json();
   test_assets();
   test_manifest();
+  test_split_bilingual_notes();
   test_github_release();
   test_sha256sums();
   test_atom();
