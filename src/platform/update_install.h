@@ -9,7 +9,7 @@ enum class InstallShape : int {
   WindowsSetup,    // Inno 安装版：弹出安装向导 + 重启
   WindowsPortable, // 便携 ZIP：打开下载目录手动覆盖
   LinuxAppImage,   // APPIMAGE：自替换 + 重启助手
-  LinuxDeb,        // /usr 下的 deb 安装：交给软件中心/资源管理器
+  LinuxDeb,        // /usr 下的 deb 安装：polkit 齐备自动安装（d496），缺失回退软件中心人工
 };
 
 InstallShape detect_install_shape();
@@ -22,7 +22,8 @@ bool open_containing_folder(const std::string& file_path);
 
 // —— v0.6.4 d460：启动已校验安装包的安装/交接动作 ——
 // WindowsSetup：ShellExecuteW 启动 Inno 交互式安装向导（/RELAUNCH）；
-// LinuxAppImage：拉起重启助手，等待本进程退出后自替换并重启；
+// LinuxAppImage：拉起重启助手，等待本进程退出后自替换并重启（d533：助手内
+//   哈希复核 + rename 失败回滚 .old + 日志 <资产>.update.log）；
 // WindowsPortable：★d495 自动换装（可写/助手/.tar 探测通过时）——拉起随包的
 //   flashrec_swap.exe 分离进程，等本进程退出 → 备份 → 解压 → 起新版 → 探活，
 //   失败自动还原；条件不满足 → 回退打开所在目录（人工交接）。

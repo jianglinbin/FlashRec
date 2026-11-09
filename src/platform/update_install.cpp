@@ -315,17 +315,28 @@ bool launch_update_installer(InstallShape shape, const std::string& asset_path,
     if (shape != InstallShape::LinuxAppImage) return false;
     const char* appimage = getenv("APPIMAGE");
     if (appimage == nullptr || *appimage == '\0') return false;
+    // d533 对齐 d496/deb 同款严谨度：①助手内哈希复核（封死「下载校验 → 等退出 →
+    // 换装」窗口期，expected_sha256 此前收了没用）；②最终 rename 失败回滚 .old
+    //（应用已退出，不留无主文件的目录）；③全程日志 <资产>.update.log（d497 教训：
+    // 无日志的失败不可诊断）。
     static constexpr char kScript[] =
-        "pid=$1; src=$2; dst=$3; "
+        "pid=$1; src=$2; dst=$3; hash=$4; "
+        "exec >>\"$src.update.log\" 2>&1; "
+        "echo \"---- appimage 助手启动 $(date +%T) pid=$pid\"; "
         "while kill -0 \"$pid\" 2>/dev/null; do sleep 0.2; done; "
+        "actual=$(sha256sum \"$src\" 2>/dev/null | cut -d' ' -f1); "
+        "echo \"哈希 actual=$actual expect=$hash\"; "
+        "[ \"$actual\" = \"$hash\" ] || { echo 哈希不符，回退; xdg-open \"$(dirname \"$dst\")\"; exit 1; }; "
         "dir=$(dirname \"$dst\"); "
-        "cp -f \"$src\" \"$dst.new\" && chmod +x \"$dst.new\" || { xdg-open \"$dir\"; exit 1; }; "
-        "rm -f \"$dst.old\"; mv -f \"$dst\" \"$dst.old\" || { xdg-open \"$dir\"; exit 1; }; "
-        "mv -f \"$dst.new\" \"$dst\" || { xdg-open \"$dir\"; exit 1; }; exec \"$dst\"";
+        "cp -f \"$src\" \"$dst.new\" && chmod +x \"$dst.new\" || { echo 复制失败; xdg-open \"$dir\"; exit 1; }; "
+        "rm -f \"$dst.old\"; "
+        "mv -f \"$dst\" \"$dst.old\" || { echo 旧版改名失败; xdg-open \"$dir\"; exit 1; }; "
+        "mv -f \"$dst.new\" \"$dst\" || { echo 新版就位失败，回滚; mv -f \"$dst.old\" \"$dst\"; xdg-open \"$dir\"; exit 1; }; "
+        "echo 安装成功，拉起新版; exec \"$dst\"";
     char pid[32];
     std::snprintf(pid, sizeof(pid), "%ld", (long)getpid());
     return spawn_detached({"/bin/sh", "-c", kScript, "flashrec-update", pid, asset_path.c_str(),
-                           appimage});
+                           appimage, expected_sha256.c_str()});
   }
   if (shape != InstallShape::LinuxDeb) return false;
   // ★d496：deb polkit 提权自动安装。detached shell 助手（d461 同款，平台分治

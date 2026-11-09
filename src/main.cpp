@@ -842,6 +842,9 @@ int main(int argc, char** argv) {
   auto update_apply = [&](const fr::update::UpdateSnapshot& us, bool cast_active) {
     UpdateUi& u = update_ui;
     u.asset = upd_shape;
+    // d531：deb + polkit 三件套齐备 → Ready 弹窗给「立即安装」（按钮矩阵据此分流）
+    u.deb_auto =
+        upd_shape == platform::InstallShape::LinuxDeb && platform::deb_polkit_supported();
     u.cast_active = cast_active;
     u.download_available = us.download_available;
     u.can_retry = false;
@@ -978,7 +981,10 @@ int main(int argc, char** argv) {
     }
     // ★d495/d496 安装前复核哈希（d473/d474 决议：防下载校验后到安装前的文件窗口
     // 被换）。main→update 是合法依赖方向，复核放这里而非 platform 层。
-    if ((portable_auto || deb_auto) && upd_snap.asset_sha256[0] != '\0') {
+    // d533：AppImage 一并纳入（助手内还有第二道复核）。
+    if ((portable_auto || deb_auto ||
+         upd_shape == platform::InstallShape::LinuxAppImage) &&
+        upd_snap.asset_sha256[0] != '\0') {
       std::string hex, err;
       if (!fr::update::sha256_file(upd_snap.asset_path, &hex, &err) ||
           hex != upd_snap.asset_sha256) {
@@ -2177,6 +2183,7 @@ int main(int argc, char** argv) {
                   top.id = 4;
                   top.label = tr(i18n::StrId::TrayAlwaysTop);
                   top.checked = always_on_top;
+                  top.checkable = true;
                   items.push_back(top);
                 }
                 {  // d437：开机启动勾选（真值 = 系统启动项本身，不落 settings.json）
@@ -2184,6 +2191,7 @@ int main(int argc, char** argv) {
                   boot.id = 5;
                   boot.label = tr(i18n::StrId::TrayStartOnBoot);
                   boot.checked = autostart::enabled();
+                  boot.checkable = true;
                   items.push_back(boot);
                 }
                 {  // v0.6.4 d459：自动更新入口。菜单每次打开实时取快照（O(1) 复制），
@@ -2223,6 +2231,7 @@ int main(int argc, char** argv) {
                       break;
                     case fr::update::UpdateState::UpToDate:
                       // 仅手动检查后 10s 内显示，避免常驻占用菜单项
+                      //（纯动作文案不带版本号——托盘是动作入口，数据反馈在弹窗 d534）
                       if (us.last_check_manual && us.last_check_at > 0 &&
                           now_s - us.last_check_at <= 10) {
                         up.label = tr(i18n::StrId::UpdTrayUpToDate);
@@ -2267,11 +2276,13 @@ int main(int argc, char** argv) {
                   lz.id = 20;
                   lz.label = tr(i18n::StrId::LangZhName);
                   lz.checked = i18n::lang() == i18n::Lang::ZhCn;
+                  lz.checkable = true;
                   items.push_back(lz);
                   TrayMenuItem le;
                   le.id = 21;
                   le.label = tr(i18n::StrId::LangEnName);
                   le.checked = i18n::lang() == i18n::Lang::EnUs;
+                  le.checkable = true;
                   items.push_back(le);
                 }
                 TrayMenuItem quit;

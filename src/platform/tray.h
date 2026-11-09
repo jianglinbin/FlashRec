@@ -20,6 +20,10 @@ struct TrayMenuItem {
   std::string label;   // UTF-8
   bool enabled = true;
   bool checked = false;
+  // 可勾选项（d530）：SNI/dbusmenu 只有显式 toggle-type=checkmark 的条目才渲染
+  // 勾选标记（Ubuntu appindicator 扩展只认该字面量；KDE 任意非空值即可），
+  // 不标记则宿主永远画不出勾（Win32 按钮态不受影响）。勾选语义仍看 checked。
+  bool checkable = false;
   bool sep = false;    // 分隔线（label 忽略）
   static TrayMenuItem Sep() {
     TrayMenuItem it;

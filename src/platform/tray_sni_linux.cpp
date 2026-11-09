@@ -177,6 +177,16 @@ void append_item_props(sd_bus_message* m, const TrayMenuItem& it, int* r) {
     *r |= sd_bus_message_append(m, "{sv}", "label", "s", it.label.c_str());
     *r |= sd_bus_message_append(m, "{sv}", "enabled", "b",
                                 (int)(it.enabled ? 1 : 0));
+    // d530：勾选态必须显式给 toggle-type/toggle-state（dbusmenu 规范属性），
+    // 否则宿主永远渲染不出勾——此前 checked 被丢弃，菜单恒显示无勾，用户二次
+    // 点击反向把已写入的自启项删掉。值用 "checkmark"：Ubuntu appindicator 扩展
+    // 只认该字面量（dbusMenu.js _updateOrnament）；KDE libdbusmenu-qt 对任意
+    // 非空 toggle-type 都 setCheckable，"checkmark" 同样成立。
+    if (it.checkable) {
+      *r |= sd_bus_message_append(m, "{sv}", "toggle-type", "s", "checkmark");
+      *r |= sd_bus_message_append(m, "{sv}", "toggle-state", "i",
+                                  (int)(it.checked ? 1 : 0));
+    }
   }
   *r |= sd_bus_message_append(m, "{sv}", "visible", "b", (int)1);
   *r |= sd_bus_message_close_container(m);
@@ -256,6 +266,7 @@ int menu_get_property(sd_bus_message* m, void* userdata, sd_bus_error* err) {
   if (r < 0) return r;
   const char* s_val = "";
   int b_val = 0;
+  int i_val = 0;
   const char* v_sig = "s";
   if (it && prop && !std::strcmp(prop, "label")) {
     s_val = it->sep ? "" : it->label.c_str();
@@ -267,11 +278,23 @@ int menu_get_property(sd_bus_message* m, void* userdata, sd_bus_error* err) {
   } else if (it && prop && !std::strcmp(prop, "visible")) {
     v_sig = "b";
     b_val = 1;
+  } else if (it && prop && it->checkable && !it->sep &&
+             !std::strcmp(prop, "toggle-type")) {
+    s_val = "checkmark";
+  } else if (it && prop && it->checkable && !it->sep &&
+             !std::strcmp(prop, "toggle-state")) {
+    v_sig = "i";
+    i_val = it->checked ? 1 : 0;
   }
   r = sd_bus_message_open_container(reply, SD_BUS_TYPE_VARIANT, v_sig);
-  if (r >= 0)
-    r = v_sig[0] == 'b' ? sd_bus_message_append(reply, "b", b_val)
-                        : sd_bus_message_append(reply, "s", s_val);
+  if (r >= 0) {
+    if (v_sig[0] == 'b')
+      r = sd_bus_message_append(reply, "b", b_val);
+    else if (v_sig[0] == 'i')
+      r = sd_bus_message_append(reply, "i", i_val);
+    else
+      r = sd_bus_message_append(reply, "s", s_val);
+  }
   if (r >= 0) r = sd_bus_message_close_container(reply);
   if (r < 0) {
     sd_bus_message_unref(reply);

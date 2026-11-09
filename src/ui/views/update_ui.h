@@ -28,6 +28,7 @@ struct UpdateUi {
   bool download_available = false;  // ManualOnly：安装包可下载（否则只提示发布页）
   bool cast_active = false;      // 当前有投屏/镜像会话 → 显示中断警告
   bool confirm_install = false;  // 投屏中已点过一次安装（主线程置位）
+  bool deb_auto = false;         // deb 形态且 polkit 三件套齐备 → Ready 给「立即安装」（d531）
   float progress = -1.f;         // 0..1；<0 = 不确定
   char version[32] = {};         // 新版本号（不含 v 前缀）
   char current[32] = {};         // 当前版本号

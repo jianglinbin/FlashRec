@@ -109,7 +109,11 @@ DialogContent build_content(NVGcontext* vg, const Theme& t, const UpdateUi& u, f
     case UpdateStage::Downloading:
       c.title = tr(i18n::StrId::UpdDlgTitleDownloading);
       break;
-    case UpdateStage::UpToDate: c.title = tr(i18n::StrId::UpdDlgTitleUpToDate); break;
+    case UpdateStage::UpToDate:
+      // d532：标题带远端版本号；快照缺失时退回当前版本号兜底（不为空才显示 fmt）
+      c.title = i18n::trf(i18n::StrId::UpdDlgTitleUpToDate,
+                          {u.version[0] ? u.version : u.current});
+      break;
     case UpdateStage::Skipped: c.title = tr(i18n::StrId::UpdDlgTitleSkipped); break;
     case UpdateStage::Failed: c.title = tr(i18n::StrId::UpdDlgTitleFailed); break;
     case UpdateStage::Installing: c.title = tr(i18n::StrId::UpdDlgTitleInstalling); break;
@@ -144,7 +148,10 @@ DialogContent build_content(NVGcontext* vg, const Theme& t, const UpdateUi& u, f
           c.hint = wrap_text(vg, small, tr(i18n::StrId::UpdDlgPortableHint), content_w, 3);
           break;
         case platform::InstallShape::LinuxDeb:
-          c.hint = wrap_text(vg, small, tr(i18n::StrId::UpdDlgDebHint), content_w, 3);
+          c.hint = wrap_text(vg, small,
+                             tr(u.deb_auto ? i18n::StrId::UpdDlgDebAutoHint
+                                           : i18n::StrId::UpdDlgDebHint),
+                             content_w, 3);
           break;
         case platform::InstallShape::Unknown:
           c.hint = wrap_text(vg, small, tr(i18n::StrId::UpdDlgDevHint), content_w, 3);
@@ -338,7 +345,10 @@ UpdateButtons update_dialog_buttons(const UpdateUi& u) {
       else if (u.asset == platform::InstallShape::WindowsPortable)
         set(UpdateButtonKind::Skip, UpdateButtonKind::Later, UpdateButtonKind::OpenFolder);
       else if (u.asset == platform::InstallShape::LinuxDeb)
-        set(UpdateButtonKind::Skip, UpdateButtonKind::Later, UpdateButtonKind::OpenFolderDeb);
+        // d531：polkit 三件套齐备 = 「立即安装」（与 Windows 安装版同按钮位）；
+        // 缺失回退「打开所在文件夹」人工交接
+        set(UpdateButtonKind::Skip, UpdateButtonKind::Later,
+            u.deb_auto ? UpdateButtonKind::Install : UpdateButtonKind::OpenFolderDeb);
       else
         set2(UpdateButtonKind::Close, UpdateButtonKind::OpenPage);
       break;

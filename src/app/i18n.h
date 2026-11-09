@@ -141,7 +141,8 @@ enum class StrId : int {
   UpdDlgManualHint,         // 自动下载已关闭，可手动下载
   UpdDlgNoAssetHint,        // 当前形态无安装包，前往发布页
   UpdDlgPortableHint,       // 便携版：打开文件夹手动替换
-  UpdDlgDebHint,            // 系统包：用软件中心/文件管理器安装
+  UpdDlgDebHint,            // 系统包：用软件中心/文件管理器安装（polkit 缺失回退）
+  UpdDlgDebAutoHint,        // 系统包：polkit 自动安装流程说明（d531）
   UpdDlgDevHint,            // 开发构建不提供自动安装
   UpdDlgCastWarning,        // 更新会中断当前投屏
   UpdDlgInstallingHint,     // 正在退出并安装
